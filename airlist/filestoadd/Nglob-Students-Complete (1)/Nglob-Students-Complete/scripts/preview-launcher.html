@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Nglob Students — desktop / mobile</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #152824; background: #eef1ef; font: 14px/1.5 system-ui, sans-serif; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; background: white; border-bottom: 1px solid #dce2df; }
+    .brand { font-size: 16px; font-weight: 750; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    button, a { font: inherit; }
+    button { padding: 9px 14px; border: 1px solid #bbc9c3; border-radius: 8px; color: #152824; background: white; cursor: pointer; }
+    button[aria-pressed="true"] { background: #12382d; color: white; border-color: #12382d; }
+    :focus-visible { outline: 3px solid #137f69; outline-offset: 3px; }
+    a { color: #174d3b; text-underline-offset: 3px; }
+    .hint { margin: 8px 16px; text-align: center; font-size: 12px; color: #445c52; }
+    .stage { margin: 12px auto 24px; position: relative; background: white; box-shadow: 0 8px 36px #14382d1a; }
+    iframe { display: block; border: 0; background: white; transform-origin: top left; }
+    noscript { display: block; padding: 24px; text-align: center; }
+    @media(max-width: 600px) { .toolbar { padding: 10px 12px; } .brand { width: 100%; } }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brand">Nglob · Students</div>
+    <nav class="controls" aria-label="Размер предпросмотра">
+      <button type="button" data-mode="desktop" aria-pressed="true">Desktop · 1440</button>
+      <button type="button" data-mode="mobile" aria-pressed="false">Mobile · 390</button>
+      <a href="./preview/index.html" target="_blank" rel="noopener">Открыть страницу</a>
+    </nav>
+  </header>
+  <p class="hint" id="size-label" role="status">Desktop · 1440 px. Прокручивайте внутри страницы.</p>
+  <main class="stage" id="stage">
+    <iframe id="page" src="./preview/index.html" title="Nglob Students — интерактивная страница" width="1440" height="900"></iframe>
+  </main>
+  <noscript><a href="./preview/index.html">Открыть готовую страницу без переключателя размеров</a></noscript>
+  <script>
+    (() => {
+      const frame = document.getElementById('page');
+      const stage = document.getElementById('stage');
+      const label = document.getElementById('size-label');
+      const buttons = [...document.querySelectorAll('[data-mode]')];
+      let mode = innerWidth < 700 ? 'mobile' : 'desktop';
+      function fit() {
+        const width = mode === 'mobile' ? 390 : 1440;
+        const availableWidth = Math.max(240, innerWidth - 24);
+        const availableHeight = Math.max(300, innerHeight - stage.getBoundingClientRect().top - 24);
+        const scale = Math.min(1, availableWidth / width);
+        const height = mode === 'mobile' ? 844 : Math.max(900, Math.floor(availableHeight / scale));
+        frame.width = String(width);
+        frame.height = String(height);
+        frame.style.transform = `scale(${scale})`;
+        stage.style.width = `${width * scale}px`;
+        stage.style.height = `${height * scale}px`;
+        buttons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.mode === mode)));
+        label.textContent = `${mode === 'mobile' ? 'Mobile' : 'Desktop'} · ${width} px. Прокручивайте внутри страницы.`;
+      }
+      buttons.forEach(button => button.addEventListener('click', () => { mode = button.dataset.mode; fit(); }));
+      addEventListener('resize', fit);
+      fit();
+    })();
+  </script>
+</body>
+</html>

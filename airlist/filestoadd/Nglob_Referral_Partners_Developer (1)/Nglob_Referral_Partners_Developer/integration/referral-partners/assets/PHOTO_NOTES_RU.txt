@@ -1,0 +1,2 @@
+Иллюстративное изображение item-list-photo.webp создано встроенной генерацией изображений для примера списка вещей. Это не фотография клиента, отзыва или результата реального сканирования. Остальные фотографии унаследованы из V6 и также иллюстративны. Исходное изображение без надписей; значимые подписи представлены в HTML.
+Промпт: Photorealistic contemporary London apartment corner, one blue upholstered armchair, one floor lamp and two kraft moving boxes; clear complete objects, natural daylight, oak floor, no text, no logo, no people.

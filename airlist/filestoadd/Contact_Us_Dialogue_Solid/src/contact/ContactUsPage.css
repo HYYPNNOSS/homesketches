@@ -1,0 +1,1866 @@
+/* Nglob Contact Us — approved Dialogue design.
+   Scoped Solid port of Source/styles.css followed by Source/contact.css.
+   Keep this order: the signature composition overrides the base controls.
+   Brand artwork, logo geometry, dimensions, palette and responsive rules
+   remain unchanged. Gallery-only presentation rules are intentionally omitted. */
+
+@font-face {
+  font-family:NglobContactInter;
+  src:url('./assets/inter-latin.woff2') format('woff2');
+  font-weight:100 900;
+  font-display:swap;
+}
+
+.nglob-contact {
+  --navy:#0b1f44;
+  --ink:#162640;
+  --muted:#56647b;
+  --amber:#f5b536;
+  --cream:#fbf9f5;
+  --line:#dce2e9;
+  --footer:#0b162c;
+  --danger:#a6202c;
+  --focus:#176aca;
+  color-scheme:light;
+}
+
+.nglob-contact,
+.nglob-contact * {
+  box-sizing:border-box;
+}
+
+.nglob-contact {
+  margin:0;
+  background:var(--cream);
+  color:var(--ink);
+  font:16px/1.55 NglobContactInter,Arial,sans-serif;
+}
+
+.nglob-contact button,
+.nglob-contact input,
+.nglob-contact textarea {
+  font:inherit;
+}
+
+.nglob-contact button,
+.nglob-contact a {
+  -webkit-tap-highlight-color:transparent;
+}
+
+.nglob-contact a {
+  color:inherit;
+  text-decoration:none;
+}
+
+.nglob-contact button {
+  cursor:pointer;
+}
+
+.nglob-contact button:disabled {
+  cursor:wait;
+}
+
+.nglob-contact button,
+.nglob-contact input,
+.nglob-contact textarea {
+  border-radius:0;
+}
+
+.nglob-contact button:focus-visible,
+.nglob-contact a:focus-visible,
+.nglob-contact input:focus-visible,
+.nglob-contact textarea:focus-visible {
+  outline:3px solid var(--focus);
+  outline-offset:4px;
+}
+
+.nglob-contact .icon {
+  width:24px;
+  height:24px;
+  flex:none;
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.7;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+
+.nglob-contact .skip {
+  position:fixed;
+  top:-80px;
+  left:20px;
+  padding:12px;
+  background:white;
+  z-index:100;
+}
+
+.nglob-contact .skip:focus {
+  top:10px;
+}
+
+.nglob-contact h1,
+.nglob-contact h2,
+.nglob-contact h3,
+.nglob-contact p {
+  margin:0;
+}
+
+.nglob-contact button {
+  border:0;
+}
+
+.nglob-contact button[hidden],
+.nglob-contact [hidden] {
+  display:none!important;
+}
+
+.nglob-contact .site-header {
+  height:88px;
+  background:#fff;
+  border-bottom:1px solid #edeef0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 48px;
+  gap:32px;
+}
+
+.nglob-contact .brand img {
+  width:112px;
+  height:auto;
+  display:block;
+}
+
+.nglob-contact .desktop-nav {
+  display:flex;
+  gap:36px;
+  align-items:center;
+  margin-left:90px;
+  font-size:14px;
+  font-weight:550;
+}
+
+.nglob-contact .header-actions {
+  display:flex;
+  align-items:center;
+  gap:28px;
+  font-size:14px;
+  font-weight:600;
+}
+
+.nglob-contact .button {
+  display:inline-flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:24px;
+  min-height:52px;
+  padding:13px 21px;
+  border-radius:12px;
+  background:var(--navy);
+  color:#fff;
+  font-size:15px;
+  font-weight:650;
+  line-height:24px;
+}
+
+.nglob-contact .button .icon {
+  width:20px;
+  height:20px;
+}
+
+.nglob-contact .header-actions .button {
+  min-height:44px;
+  padding:10px 19px;
+  border-radius:10px;
+  font-size:14px;
+}
+
+.nglob-contact .menu-toggle {
+  display:none;
+}
+
+.nglob-contact .mobile-nav {
+  display:none;
+}
+
+.nglob-contact .page {
+  width:min(1120px,calc(100% - 96px));
+  margin:auto;
+  padding:64px 0 56px;
+}
+
+.nglob-contact h1 {
+  font-size:66px;
+  line-height:1.08;
+  letter-spacing:-3px;
+  font-weight:650;
+  color:var(--navy);
+}
+
+.nglob-contact .email-address {
+  align-self:flex-start;
+  margin-top:22px;
+  font-size:23px;
+  font-weight:600;
+  line-height:1.35;
+  letter-spacing:-.45px;
+  text-decoration:underline;
+  text-underline-offset:6px;
+  text-decoration-thickness:1px;
+  color:var(--navy);
+}
+
+.nglob-contact .callback {
+  margin-top:24px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:20px;
+  overflow:hidden;
+}
+
+.nglob-contact .callback-head {
+  display:flex;
+  align-items:center;
+  gap:22px;
+  padding:25px 28px;
+}
+
+.nglob-contact .callback h2 {
+  font-size:23px;
+  letter-spacing:-.5px;
+  line-height:1.35;
+  font-weight:610;
+  margin-bottom:4px;
+}
+
+.nglob-contact .site-footer {
+  background:var(--footer);
+  color:#d8e1ee;
+  padding:46px 48px 102px;
+}
+
+.nglob-contact .footer-top {
+  display:grid;
+  grid-template-columns:1.55fr 1fr 1fr 1.13fr .85fr;
+  gap:36px;
+  max-width:1344px;
+  margin:auto;
+}
+
+.nglob-contact .footer-brand img {
+  width:119px;
+  filter:brightness(0) invert(1);
+  display:block;
+}
+
+.nglob-contact .footer-brand p {
+  font-size:13px;
+  line-height:1.8;
+  max-width:230px;
+  margin-top:20px;
+  color:#bfcbdc;
+}
+
+.nglob-contact .footer-brand .footer-email {
+  display:inline-block;
+  margin-top:17px;
+  font-size:13px;
+  text-decoration:underline;
+  text-underline-offset:4px;
+}
+
+.nglob-contact .footer-col h2 {
+  font-size:11px;
+  letter-spacing:1.1px;
+  font-weight:650;
+  color:#90b4e2;
+  text-transform:uppercase;
+  margin:4px 0 20px;
+}
+
+.nglob-contact .footer-col ul {
+  list-style:none;
+  padding:0;
+  margin:0;
+}
+
+.nglob-contact .footer-col li+li {
+  margin-top:13px;
+}
+
+.nglob-contact .footer-col a {
+  font-size:13px;
+  line-height:1.6;
+}
+
+.nglob-contact .footer-col [aria-current=page] {
+  color:white;
+  text-decoration:underline;
+  text-underline-offset:5px;
+}
+
+.nglob-contact .footer-bottom {
+  max-width:1344px;
+  display:flex;
+  justify-content:space-between;
+  gap:24px;
+  align-items:center;
+  margin:35px auto 0;
+  border-top:1px solid #304059;
+  padding-top:24px;
+  font-size:11px;
+  color:#bfcbdc;
+}
+
+.nglob-contact .footer-legal {
+  display:flex;
+  gap:26px;
+}
+
+.nglob-contact .chat-dock {
+  position:fixed;
+  right:24px;
+  bottom:24px;
+  z-index:10;
+}
+
+.nglob-contact .launcher {
+  height:52px;
+  min-width:112px;
+  border-radius:30px;
+  background:var(--navy);
+  box-shadow:0 6px 24px #0b1f4424,0 0 0 1px #ffffff70;
+  color:#fff;
+  display:flex;
+  gap:11px;
+  align-items:center;
+  justify-content:center;
+  font-size:15px;
+  font-weight:600;
+  padding:0 20px;
+  border:1px solid #536681;
+}
+
+.nglob-contact .launcher .icon {
+  width:23px;
+  height:23px;
+}
+
+.nglob-contact .callback-form {
+  border-top:1px solid var(--line);
+  padding:26px 32px 32px;
+}
+
+.nglob-contact .form-caption {
+  font-size:13px;
+  color:var(--muted);
+  margin-bottom:23px;
+}
+
+.nglob-contact .form-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:22px 24px;
+}
+
+.nglob-contact .field {
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.nglob-contact label {
+  font-size:14px;
+  font-weight:600;
+  line-height:1.4;
+}
+
+.nglob-contact .optional {
+  font-size:12px;
+  color:var(--muted);
+  font-weight:400;
+}
+
+.nglob-contact input,
+.nglob-contact textarea {
+  border:1px solid #8a98ab;
+  border-radius:10px;
+  background:#fff;
+  padding:12px 14px;
+  font-size:16px;
+  line-height:24px;
+  color:var(--ink);
+  width:100%;
+  min-width:0;
+  min-height:49px;
+}
+
+.nglob-contact input::placeholder,
+.nglob-contact textarea::placeholder {
+  color:#6b7789;
+  opacity:1;
+}
+
+.nglob-contact textarea {
+  resize:vertical;
+  min-height:98px;
+}
+
+.nglob-contact .field-note {
+  font-size:12px;
+  color:var(--muted);
+  line-height:1.55;
+}
+
+.nglob-contact .field-note.error {
+  font-size:13px;
+  color:var(--danger);
+}
+
+.nglob-contact .field.has-error input,
+.nglob-contact .field.has-error textarea {
+  border:2px solid var(--danger);
+  padding:11px 13px;
+}
+
+.nglob-contact .privacy-note {
+  margin:22px 0 17px;
+  font-size:12px;
+  line-height:1.65;
+  color:var(--muted);
+}
+
+.nglob-contact .privacy-note a {
+  text-decoration:underline;
+  text-underline-offset:3px;
+}
+
+.nglob-contact .callback-form>.button {
+  min-width:230px;
+}
+
+.nglob-contact .form-outcome {
+  display:flex;
+  gap:15px;
+  padding:23px 26px;
+  margin:0 28px 28px;
+  border-radius:14px;
+  background:#f4f6f9;
+  border:1px solid #d6dee9;
+  font-size:14px;
+}
+
+.nglob-contact .form-outcome h3 {
+  font-size:17px;
+  line-height:1.4;
+  margin-bottom:5px;
+}
+
+.nglob-contact .form-outcome p {
+  font-size:13px;
+  line-height:1.65;
+  color:var(--muted);
+}
+
+.nglob-contact .form-outcome .text-button {
+  margin-top:13px;
+}
+
+.nglob-contact .text-button {
+  font-size:13px;
+  padding:5px 0;
+  color:var(--navy);
+  text-decoration:underline;
+  text-underline-offset:4px;
+  background:none;
+  font-weight:600;
+}
+
+.nglob-contact .form-outcome.success {
+  background:#f2f7f4;
+  border-color:#cbded2;
+  color:#315746;
+}
+
+.nglob-contact .form-outcome.error {
+  background:#fff5f3;
+  border-color:#e6bbb7;
+}
+
+.nglob-contact .form-outcome .icon {
+  margin-top:3px;
+}
+
+.nglob-contact .spinner {
+  display:inline-block;
+  width:19px;
+  height:19px;
+  border-radius:50%;
+  border:2px solid currentColor;
+  border-right-color:transparent;
+  flex:none;
+}
+
+.nglob-contact .callback.is-open .callback-head {
+  padding-bottom:23px;
+}
+
+.nglob-contact .chat-panel {
+  position:fixed;
+  z-index:30;
+  right:24px;
+  bottom:24px;
+  width:416px;
+  height:min(690px,calc(100dvh - 48px));
+  background:#fff;
+  box-shadow:0 14px 70px #09182f30;
+  border:1px solid #cbd5e2;
+  border-radius:24px;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.nglob-contact .chat-header {
+  background:var(--navy);
+  color:#fff;
+  padding:19px 20px;
+  display:flex;
+  align-items:center;
+  gap:13px;
+}
+
+.nglob-contact .chat-header h2 {
+  font-size:16px;
+  line-height:1.4;
+  font-weight:600;
+  letter-spacing:-.2px;
+}
+
+.nglob-contact .chat-header p {
+  font-size:12px;
+  color:#d2dfef;
+  margin-top:2px;
+}
+
+.nglob-contact .minimise {
+  background:transparent;
+  color:white;
+  border-radius:8px;
+  padding:10px;
+  margin-left:auto;
+  width:44px;
+  height:44px;
+}
+
+.nglob-contact .chat-body {
+  padding:27px 22px;
+  flex:1;
+  overflow:auto;
+}
+
+.nglob-contact .chat-title {
+  font-size:27px;
+  letter-spacing:-.8px;
+  line-height:1.23;
+  color:var(--navy);
+  font-weight:620;
+  margin-bottom:13px;
+}
+
+.nglob-contact .chat-body>p {
+  font-size:14px;
+  color:var(--muted);
+  line-height:1.65;
+}
+
+.nglob-contact .chat-chips {
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  align-items:flex-start;
+  margin-top:22px;
+}
+
+.nglob-contact .chat-chips button {
+  border:1px solid #d4dce7;
+  background:#fff;
+  color:var(--navy);
+  border-radius:9px;
+  padding:11px 14px;
+  font-size:13px;
+  min-height:44px;
+}
+
+.nglob-contact .chat-human {
+  border-top:1px solid var(--line);
+  margin-top:26px;
+  padding-top:17px;
+}
+
+.nglob-contact .chat-human p {
+  font-size:12px;
+  color:var(--muted);
+  line-height:1.6;
+}
+
+.nglob-contact .chat-human .text-button {
+  font-size:13px;
+  margin-top:6px;
+}
+
+.nglob-contact .chat-composer {
+  border-top:1px solid var(--line);
+  padding:15px 18px 17px;
+}
+
+.nglob-contact .chat-privacy {
+  font-size:11px;
+  line-height:1.6;
+  color:var(--muted);
+  margin-bottom:11px;
+}
+
+.nglob-contact .chat-privacy a {
+  text-decoration:underline;
+  text-underline-offset:3px;
+}
+
+.nglob-contact .composer-row {
+  display:flex;
+  align-items:center;
+  border:1px solid #8797ad;
+  border-radius:12px;
+  padding:6px 6px 6px 13px;
+  gap:10px;
+}
+
+.nglob-contact .composer-row textarea {
+  border:0;
+  min-height:38px;
+  height:38px;
+  padding:7px 0;
+  font-size:14px;
+  line-height:22px;
+  resize:none;
+}
+
+.nglob-contact .send-message {
+  width:38px;
+  height:38px;
+  border-radius:9px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:var(--navy);
+  color:white;
+  flex:none;
+}
+
+.nglob-contact .send-message:disabled {
+  background:#e4e9f0;
+  color:#6b7789;
+  cursor:default;
+}
+
+.nglob-contact .send-message .icon {
+  width:19px;
+  height:19px;
+}
+
+.nglob-contact .reference-note {
+  background:#fff3ce;
+  color:#463c21;
+  padding:10px 20px;
+  font:13px NglobContactInter;
+  position:relative;
+  z-index:70;
+  text-align:center;
+}
+
+.nglob-contact.has-chat .chat-dock {
+  display:none;
+}
+
+@media(min-width:760px) and (max-width:1100px) {
+  .nglob-contact .desktop-nav {
+    margin-left:0;
+    gap:21px;
+  }
+
+  .nglob-contact .site-header {
+    padding:0 30px;
+    gap:20px;
+  }
+
+  .nglob-contact .header-actions {
+    gap:18px;
+  }
+
+  .nglob-contact .page {
+    width:calc(100% - 80px);
+  }
+
+  .nglob-contact h1 {
+    font-size:57px;
+  }
+
+  .nglob-contact .footer-top {
+    gap:24px;
+    grid-template-columns:1.25fr 1fr 1fr 1.1fr .8fr;
+  }
+
+  .nglob-contact .site-footer {
+    padding-left:35px;
+    padding-right:35px;
+  }
+
+  .nglob-contact .email-address {
+    font-size:20px;
+  }
+}
+
+@media(max-width:759px) {
+  .nglob-contact {
+    font-size:15px;
+  }
+
+  .nglob-contact .app-shell {
+    height:100dvh;
+    display:flex;
+    flex-direction:column;
+  }
+
+  .nglob-contact .scroll-region {
+    min-height:0;
+    flex:1;
+    overflow-y:auto;
+    overflow-x:hidden;
+    overscroll-behavior-y:contain;
+  }
+
+  .nglob-contact .site-header {
+    height:72px;
+    min-height:72px;
+    padding:0 20px;
+    gap:13px;
+  }
+
+  .nglob-contact .brand img {
+    width:91px;
+  }
+
+  .nglob-contact .desktop-nav,
+  .nglob-contact .header-login {
+    display:none;
+  }
+
+  .nglob-contact .header-actions {
+    gap:10px;
+    margin-left:auto;
+  }
+
+  .nglob-contact .header-actions .button {
+    font-size:12px;
+    min-height:40px;
+    padding:8px 12px;
+    gap:0;
+    white-space:nowrap;
+  }
+
+  .nglob-contact .menu-toggle {
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:42px;
+    height:42px;
+    border-radius:9px;
+    color:var(--navy);
+    background:transparent;
+    padding:9px;
+  }
+
+  .nglob-contact .menu-toggle .icon {
+    width:23px;
+  }
+
+  .nglob-contact .mobile-nav.is-open {
+    display:flex;
+    flex-direction:column;
+    padding:9px 20px 22px;
+    border-top:1px solid var(--line);
+    background:white;
+  }
+
+  .nglob-contact .mobile-nav a {
+    padding:13px 8px;
+    border-bottom:1px solid #e8ecf1;
+    font-size:15px;
+    font-weight:550;
+    min-height:49px;
+  }
+
+  .nglob-contact .page {
+    width:calc(100% - 40px);
+    padding:33px 0 36px;
+  }
+
+  .nglob-contact h1 {
+    font-size:44px;
+    letter-spacing:-1.9px;
+    line-height:1.12;
+  }
+
+  .nglob-contact .email-address {
+    font-size:21px;
+    letter-spacing:-.55px;
+    margin-top:20px;
+    line-height:1.4;
+  }
+
+  .nglob-contact .callback {
+    margin-top:16px;
+    border-radius:18px;
+  }
+
+  .nglob-contact .callback-head {
+    flex-wrap:wrap;
+    gap:14px;
+    padding:23px;
+  }
+
+  .nglob-contact .callback h2 {
+    font-size:21px;
+    letter-spacing:-.5px;
+  }
+
+  .nglob-contact .site-footer {
+    padding:32px 24px 31px;
+  }
+
+  .nglob-contact .footer-top {
+    grid-template-columns:1fr 1fr;
+    gap:28px 25px;
+  }
+
+  .nglob-contact .footer-brand {
+    grid-column:1/-1;
+    display:block;
+  }
+
+  .nglob-contact .footer-brand img {
+    width:104px;
+  }
+
+  .nglob-contact .footer-brand p {
+    font-size:12px;
+    line-height:1.7;
+    margin-top:15px;
+    max-width:280px;
+  }
+
+  .nglob-contact .footer-brand .footer-email {
+    font-size:12px;
+    margin-top:9px;
+  }
+
+  .nglob-contact .footer-col h2 {
+    font-size:10px;
+    margin:0 0 15px;
+    letter-spacing:1px;
+  }
+
+  .nglob-contact .footer-col li+li {
+    margin-top:0;
+  }
+
+  .nglob-contact .footer-col a {
+    font-size:12px;
+    min-height:37px;
+    display:flex;
+    align-items:center;
+    line-height:1.4;
+  }
+
+  .nglob-contact .footer-bottom {
+    display:block;
+    margin-top:26px;
+    padding-top:22px;
+    font-size:10px;
+  }
+
+  .nglob-contact .footer-legal {
+    gap:10px 21px;
+    margin-top:10px;
+    flex-wrap:wrap;
+  }
+
+  .nglob-contact .footer-legal a {
+    min-height:35px;
+    display:flex;
+    align-items:center;
+  }
+
+  .nglob-contact .chat-dock {
+    position:static;
+    z-index:10;
+    flex:none;
+    height:74px;
+    padding:11px 16px;
+    background:#fff;
+    border-top:1px solid var(--line);
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    padding-bottom:calc(11px + env(safe-area-inset-bottom));
+    height:calc(74px + env(safe-area-inset-bottom));
+  }
+
+  .nglob-contact .launcher {
+    height:50px;
+    min-width:106px;
+    font-size:14px;
+    box-shadow:none;
+    border:0;
+  }
+
+  .nglob-contact .callback-form {
+    padding:21px 23px 25px;
+  }
+
+  .nglob-contact .form-grid {
+    display:flex;
+    flex-direction:column;
+    gap:21px;
+  }
+
+  .nglob-contact .form-caption {
+    font-size:12px;
+    margin-bottom:21px;
+  }
+
+  .nglob-contact .field {
+    gap:8px;
+  }
+
+  .nglob-contact label {
+    font-size:13px;
+  }
+
+  .nglob-contact .optional {
+    font-size:11px;
+  }
+
+  .nglob-contact .field-note {
+    font-size:12px;
+  }
+
+  .nglob-contact .privacy-note {
+    font-size:12px;
+    margin:20px 0 18px;
+  }
+
+  .nglob-contact .callback-form>.button {
+    width:100%;
+    min-width:0;
+    font-size:13px;
+    gap:14px;
+    padding:13px 16px;
+  }
+
+  .nglob-contact .callback.is-open .callback-head {
+    padding-bottom:21px;
+  }
+
+  .nglob-contact .form-outcome {
+    margin:0 23px 23px;
+    padding:18px 16px;
+    gap:12px;
+  }
+
+  .nglob-contact .form-outcome h3 {
+    font-size:16px;
+  }
+
+  .nglob-contact .form-outcome p {
+    font-size:12px;
+  }
+
+  .nglob-contact .form-outcome .icon {
+    width:22px;
+    height:22px;
+  }
+
+  .nglob-contact .chat-panel {
+    right:0;
+    bottom:0;
+    top:0;
+    width:100%;
+    height:100dvh;
+    border:0;
+    border-radius:0;
+    box-shadow:none;
+  }
+
+  .nglob-contact .chat-header {
+    min-height:79px;
+    padding:17px 20px;
+  }
+
+  .nglob-contact .chat-body {
+    padding:30px 24px;
+  }
+
+  .nglob-contact .chat-title {
+    font-size:28px;
+    max-width:270px;
+  }
+
+  .nglob-contact .chat-body>p {
+    font-size:14px;
+    max-width:290px;
+  }
+
+  .nglob-contact .chat-chips {
+    margin-top:26px;
+  }
+
+  .nglob-contact .chat-human {
+    margin-top:29px;
+  }
+
+  .nglob-contact .chat-composer {
+    padding:15px 18px calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .nglob-contact .chat-privacy {
+    font-size:11px;
+  }
+
+  .nglob-contact .reference-note {
+    font-size:11px;
+    padding:8px 15px;
+    flex:none;
+  }
+}
+
+.nglob-contact .chat-title:focus {
+  outline:none;
+}
+
+@media(prefers-reduced-motion:no-preference) {
+  .nglob-contact a,
+  .nglob-contact button {
+    transition:background-color .14s,color .14s,border-color .14s;
+  }
+
+  .nglob-contact a:hover {
+    text-decoration:underline;
+    text-underline-offset:4px;
+  }
+
+  .nglob-contact .button:hover {
+    text-decoration:none;
+    filter:brightness(.96);
+  }
+}
+
+.nglob-contact .chat-body {
+  min-height: 0;
+}
+
+.nglob-contact .reference-inline {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid #cbd5e2;
+  border-radius: 10px;
+  background: #f4f6f9;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.nglob-contact .team-form {
+  margin-top: 22px;
+}
+
+.nglob-contact .team-form .field + .field {
+  margin-top: 17px;
+}
+
+.nglob-contact .team-form > .button {
+  width: 100%;
+}
+
+.nglob-contact .team-back + .chat-title {
+  margin-top: 18px;
+}
+
+.nglob-contact {
+  background: #fff;
+}
+
+.nglob-contact.has-chat .reference-note {
+  z-index: 0;
+}
+
+.nglob-contact .chat-reference {
+  flex: none;
+  padding: 8px 20px;
+  background: #fff3ce;
+  color: #463c21;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.nglob-contact .contact-page {
+  width: min(1184px, calc(100% - 96px));
+  padding: 42px 0 42px;
+}
+
+.nglob-contact .contact-hero {
+  display: grid;
+  grid-template-columns: .94fr 1.06fr;
+  align-items: center;
+  min-height: 392px;
+  gap: 24px;
+  position: relative;
+}
+
+.nglob-contact .hero-copy {
+  padding: 8px 0 26px 36px;
+  position: relative;
+  z-index: 1;
+}
+
+.nglob-contact .page-label {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 550;
+  color: #4d607a;
+  margin-bottom: 14px;
+}
+
+.nglob-contact .hero-copy h1 {
+  font-size: 86px;
+  line-height: 1.05;
+  letter-spacing: -4.5px;
+  font-weight: 620;
+}
+
+.nglob-contact .hero-lead {
+  max-width: 370px;
+  margin-top: 22px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.nglob-contact .chat-start {
+  min-width: 284px;
+  margin-top: 26px;
+  min-height: 54px;
+  border-radius: 12px;
+}
+
+.nglob-contact .team-entry {
+  margin-top: 9px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.nglob-contact .team-entry > span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  padding-left: 16px;
+  border-left: 1px solid #bdc7d5;
+}
+
+.nglob-contact .team-direct {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  border-radius: 4px;
+  padding: 6px 0;
+  color: var(--navy);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 550;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+
+.nglob-contact .team-direct .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.nglob-contact .connection-scene {
+  --shortmark: url('./assets/nglob-mark.svg');
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  height: 400px;
+  margin: -14px -8px 0 -30px;
+  pointer-events: none;
+}
+
+.nglob-contact .scene-halo {
+  position: absolute;
+  inset: 5px -20px -8px 5px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 62% 65%, #f2f5f8 0%, #fbfcfd 40%, #fff 72%);
+}
+
+.nglob-contact .brand-depth {
+  position: absolute;
+  width: 294px;
+  right: -8px;
+  top: 8px;
+  display: grid;
+  grid-template-columns: repeat(5, 22px);
+  gap: 30px 31px;
+  mask-image: linear-gradient(135deg,#000 5%,#000 72%,transparent);
+}
+
+.nglob-contact .depth-mark {
+  display: block;
+  width: 22px;
+  aspect-ratio: 107 / 88;
+  background: var(--shortmark) center / contain no-repeat;
+  opacity: .12;
+}
+
+.nglob-contact .depth-mark:nth-child(5n+1) {
+  opacity: .035;
+}
+
+.nglob-contact .depth-mark:nth-child(5n+2) {
+  opacity: .06;
+}
+
+.nglob-contact .depth-mark:nth-child(5n+3) {
+  opacity: .095;
+}
+
+.nglob-contact .depth-mark:nth-child(n+21) {
+  opacity: .035;
+}
+
+.nglob-contact .connection-scene .moving-art {
+  position: absolute;
+  width: 630px;
+  height: auto;
+  max-width: 110%;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%,-50%);
+  z-index: 1;
+}
+
+.nglob-contact .brand-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 48px;
+  flex: none;
+}
+
+.nglob-contact .brand-avatar img {
+  display: block;
+  width: 50px;
+  height: auto;
+  flex: none;
+}
+
+.nglob-contact .chat-header {
+  background: #f7f9fc;
+  color: var(--navy);
+  border-bottom: 1px solid #e1e7f0;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.nglob-contact .chat-header p {
+  color: var(--muted);
+}
+
+.nglob-contact .chat-header .minimise {
+  color: var(--navy);
+}
+
+.nglob-contact .chat-header .minimise:hover {
+  background: #e8eef7;
+}
+
+.nglob-contact .contact-hub {
+  margin-top: 12px;
+}
+
+.nglob-contact .contact-band {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 40px;
+  padding: 29px 36px 27px;
+  border-radius: 24px;
+  background: var(--navy);
+  color: #fff;
+}
+
+.nglob-contact .contact-band h2 {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 550;
+  letter-spacing: 0;
+  margin: 0;
+  color: #d5e0ef;
+}
+
+.nglob-contact .contact-band .email-address {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin: 3px 0 0;
+  color: #fff;
+  font-size: 29px;
+  font-weight: 540;
+  letter-spacing: -.85px;
+  line-height: 1.35;
+  min-height: 54px;
+  text-decoration: none;
+  border-radius: 5px;
+}
+
+.nglob-contact .contact-band .email-address .icon {
+  width: 21px;
+  height: 21px;
+  color: #aec6e9;
+}
+
+.nglob-contact .contact-band p {
+  color: #d5e0ef;
+  font-size: 12px;
+  line-height: 1.65;
+  margin-top: 4px;
+}
+
+.nglob-contact .mail-app-note {
+  display: block;
+  color: #b6c7df;
+  font-size: 11px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+.nglob-contact .contact-band .callback {
+  margin: 0;
+  padding: 0 0 0 40px;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid #3c4d6b;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.nglob-contact .contact-band .callback-head,
+.nglob-contact .contact-band .callback.is-open .callback-head {
+  display: block;
+  padding: 0;
+}
+
+.nglob-contact .callback-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  width: 100%;
+  min-height: 54px;
+  padding: 3px 0;
+  margin: 3px 0 0;
+  background: transparent;
+  color: #fff;
+  text-align: left;
+  font-size: 25px;
+  line-height: 1.35;
+  font-weight: 540;
+  letter-spacing: -.65px;
+  border-radius: 5px;
+}
+
+.nglob-contact .callback-toggle .icon {
+  width: 21px;
+  height: 21px;
+  color: #aec6e9;
+}
+
+.nglob-contact .contact-band .callback-toggle[aria-expanded=true] .icon {
+  transform: rotate(180deg);
+}
+
+.nglob-contact .contact-band a:hover,
+.nglob-contact .contact-band button:hover {
+  text-decoration: underline;
+  text-underline-offset: 6px;
+  text-decoration-thickness: 1px;
+}
+
+.nglob-contact .contact-band a:focus-visible,
+.nglob-contact .contact-band button:focus-visible {
+  outline-color: var(--amber);
+  outline-offset: 5px;
+}
+
+.nglob-contact .app-shell.callback-open .contact-band {
+  border-radius: 24px 24px 0 0;
+}
+
+.nglob-contact .callback-expansion {
+  padding: 30px 35px 34px;
+  border: 1px solid #cbd5e2;
+  border-top: 0;
+  border-radius: 0 0 24px 24px;
+}
+
+.nglob-contact .callback-expansion .callback-form {
+  border: 0;
+  padding: 0;
+}
+
+.nglob-contact .callback-expansion .form-caption {
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.nglob-contact .callback-expansion .form-grid {
+  gap: 24px 32px;
+}
+
+.nglob-contact .callback-expansion textarea {
+  min-height: 120px;
+}
+
+.nglob-contact .contact-help {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  padding: 20px 36px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nglob-contact .contact-help a {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  color: var(--navy);
+  font-weight: 600;
+}
+
+.nglob-contact .contact-help .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.nglob-contact .contact-help a:hover {
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+
+@media (min-width: 760px) {
+  .nglob-contact .app-shell:not(.is-below-contact) .chat-dock {
+    display: none;
+  }
+}
+
+@media (min-width: 760px) and (max-width: 1100px) {
+  .nglob-contact .contact-page {
+    width: calc(100% - 64px);
+    padding-top: 38px;
+  }
+
+  .nglob-contact .contact-hero {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    min-height: 375px;
+  }
+
+  .nglob-contact .hero-copy {
+    padding-left: 26px;
+  }
+
+  .nglob-contact .hero-copy h1 {
+    font-size: 70px;
+    letter-spacing: -3.5px;
+  }
+
+  .nglob-contact .hero-lead {
+    font-size: 15px;
+    max-width: 335px;
+  }
+
+  .nglob-contact .connection-scene .moving-art {
+    width: 535px;
+  }
+
+  .nglob-contact .brand-depth {
+    right: 0;
+    width: 230px;
+    grid-template-columns: repeat(5,18px);
+    gap: 26px 23px;
+  }
+
+  .nglob-contact .depth-mark {
+    width: 18px;
+  }
+
+  .nglob-contact .connection-scene {
+    height: 345px;
+    margin: -8px -18px 0 -20px;
+  }
+
+  .nglob-contact .contact-band {
+    gap: 24px;
+    padding: 25px 26px;
+  }
+
+  .nglob-contact .contact-band .email-address {
+    font-size: 23px;
+  }
+
+  .nglob-contact .contact-band .callback {
+    padding-left: 24px;
+  }
+
+  .nglob-contact .callback-toggle {
+    font-size: 22px;
+    gap: 12px;
+  }
+
+  .nglob-contact .callback-expansion {
+    padding: 28px 25px;
+  }
+
+  .nglob-contact .contact-help {
+    padding-left: 26px;
+  }
+}
+
+@media (min-width: 760px) and (max-width: 900px) {
+  .nglob-contact .hero-copy h1 {
+    font-size: 62px;
+    letter-spacing: -3px;
+  }
+
+  .nglob-contact .contact-hero {
+    min-height: 360px;
+  }
+
+  .nglob-contact .hero-lead {
+    font-size: 14px;
+  }
+
+  .nglob-contact .connection-scene .moving-art {
+    width: 420px;
+  }
+
+  .nglob-contact .connection-scene {
+    height: 320px;
+  }
+
+  .nglob-contact .contact-band .email-address {
+    font-size: 21px;
+  }
+
+  .nglob-contact .callback-toggle {
+    font-size: 19px;
+  }
+
+  .nglob-contact .contact-band p {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 759px) {
+  .nglob-contact .scroll-region {
+    scroll-padding-block: 12px;
+  }
+
+  .nglob-contact .contact-page :is(a, button, input, textarea) {
+    scroll-margin-block: 12px;
+  }
+
+  .nglob-contact .contact-page {
+    width: calc(100% - 40px);
+    padding: 28px 0 28px;
+  }
+
+  .nglob-contact .contact-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    min-height: 0;
+  }
+
+  .nglob-contact .hero-copy {
+    padding: 0;
+  }
+
+  .nglob-contact .page-label {
+    font-size: 12px;
+    line-height: 20px;
+    margin-bottom: 10px;
+  }
+
+  .nglob-contact .hero-copy h1 {
+    font-size: 60px;
+    line-height: 1.06;
+    letter-spacing: -3.3px;
+  }
+
+  .nglob-contact .hero-lead {
+    margin-top: 16px;
+    font-size: 14px;
+    line-height: 1.65;
+    max-width: 400px;
+  }
+
+  .nglob-contact .chat-start {
+    width: 100%;
+    min-width: 0;
+    margin-top: 22px;
+    min-height: 52px;
+    font-size: 14px;
+    gap: 14px;
+  }
+
+  .nglob-contact .team-entry {
+    gap: 12px;
+    margin-top: 6px;
+  }
+
+  .nglob-contact .team-entry > span {
+    padding-left: 12px;
+  }
+
+  .nglob-contact .team-direct {
+    font-size: 14px;
+    min-height: 44px;
+  }
+
+  .nglob-contact .brand-depth {
+    width: 170px;
+    right: 12px;
+    top: 0;
+    grid-template-columns: repeat(5,14px);
+    gap: 16px 18px;
+  }
+
+  .nglob-contact .depth-mark {
+    width: 14px;
+    opacity: .09;
+  }
+
+  .nglob-contact .scene-halo {
+    inset: 0 0 -2px;
+  }
+
+  .nglob-contact .connection-scene .moving-art {
+    width: 296px;
+  }
+
+  .nglob-contact .chat-header {
+    padding: 14px 20px;
+  }
+
+  .nglob-contact .connection-scene {
+    height: 182px;
+    margin: 10px 0 -6px;
+  }
+
+  .nglob-contact .contact-hub {
+    margin-top: 10px;
+  }
+
+  .nglob-contact .contact-band {
+    display: block;
+    padding: 25px 24px;
+    border-radius: 22px;
+  }
+
+  .nglob-contact .contact-band h2 {
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .nglob-contact .contact-band .email-address {
+    font-size: 25px;
+    letter-spacing: -.7px;
+    gap: 12px;
+    min-height: 51px;
+  }
+
+  .nglob-contact .contact-band .email-address .icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .nglob-contact .contact-band p {
+    font-size: 12px;
+    margin-top: 4px;
+  }
+
+  .nglob-contact .mail-app-note {
+    font-size: 11px;
+    margin-top: 5px;
+  }
+
+  .nglob-contact .contact-band .callback {
+    border-left: 0;
+    border-top: 1px solid #3c4d6b;
+    padding: 22px 0 0;
+    margin-top: 22px;
+  }
+
+  .nglob-contact .callback-toggle {
+    font-size: 22px;
+    min-height: 51px;
+    letter-spacing: -.5px;
+    gap: 12px;
+  }
+
+  .nglob-contact .callback-toggle .icon {
+    width: 19px;
+    height: 19px;
+  }
+
+  .nglob-contact .app-shell.callback-open .contact-band {
+    border-radius: 22px 22px 0 0;
+  }
+
+  .nglob-contact .callback-expansion {
+    padding: 25px 23px;
+    border-radius: 0 0 22px 22px;
+  }
+
+  .nglob-contact .callback-expansion .form-caption {
+    font-size: 13px;
+  }
+
+  .nglob-contact .callback-expansion .form-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .nglob-contact .callback-expansion .callback-form > .button {
+    width: 100%;
+    min-width: 0;
+    font-size: 13px;
+    padding: 13px 15px;
+    gap: 14px;
+  }
+
+  .nglob-contact .contact-help {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    padding: 17px 0 0;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 359px) {
+  .nglob-contact .hero-copy h1 {
+    font-size: 53px;
+    letter-spacing: -2.8px;
+  }
+
+  .nglob-contact .contact-band {
+    padding: 23px 20px;
+  }
+
+  .nglob-contact .contact-band .email-address {
+    font-size: 21px;
+  }
+
+  .nglob-contact .callback-toggle {
+    font-size: 20px;
+  }
+
+  .nglob-contact .callback-expansion {
+    padding: 24px 19px;
+  }
+
+  .nglob-contact .connection-scene .moving-art {
+    width: 270px;
+  }
+
+  .nglob-contact .connection-scene {
+    height: 182px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nglob-contact .chat-start {
+    transition: background .18s ease, transform .18s ease;
+  }
+
+  .nglob-contact .chat-start:hover {
+    background: #183968;
+    transform: translateY(-1px);
+  }
+
+  .nglob-contact .chat-start .icon,
+  .nglob-contact .team-direct .icon,
+  .nglob-contact .email-address .icon,
+  .nglob-contact .contact-help .icon,
+  .nglob-contact .contact-band .callback-toggle .icon {
+    transition: transform .17s ease;
+  }
+
+  .nglob-contact :is(.chat-start,.team-direct,.email-address,.contact-help a):is(:hover,:focus-visible) .icon {
+    transform: translateX(3px);
+  }
+}
+
+/* The component supplies its own typography without styling the host page. */
+.nglob-contact button,
+.nglob-contact input,
+.nglob-contact textarea {
+  font-family: NglobContactInter, Arial, sans-serif;
+}
+
+/* Only used when an application supplies a real assistant adapter. */
+.nglob-contact .chat-transcript {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+}
+.nglob-contact .chat-message {
+  padding: 14px;
+  border-radius: 12px;
+  background: #f2f5f9;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.nglob-contact .chat-message.from-client { background: #eaf0f8; }
+.nglob-contact .chat-speaker {
+  margin-bottom: 5px;
+  font-weight: 600;
+  color: var(--navy);
+}

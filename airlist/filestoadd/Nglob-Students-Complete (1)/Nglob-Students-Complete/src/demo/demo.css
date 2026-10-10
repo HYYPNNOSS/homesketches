@@ -1,0 +1,7 @@
+@font-face { font-family: Inter; src: url('/nglob-students/assets/inter.woff2') format('woff2'); font-style: normal; font-weight: 100 900; font-display: swap; }
+html { scroll-behavior: smooth; }
+body { margin: 0; font-family: Inter, Arial, sans-serif; background: #fff; }
+.demo-skip { position: fixed; left: 1rem; top: 1rem; clip-path: inset(50%); padding: 1rem; z-index: 100; background: #101d35; color: white; }
+.demo-skip:focus { clip-path: none; }
+.demo-note { padding: 1.25rem 2rem; background: #f1f4f9; color: #536074; font-size: 14px; text-align: center; }
+@media(prefers-reduced-motion:reduce) { html { scroll-behavior: auto; } }

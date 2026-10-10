@@ -1,0 +1,14 @@
+/* Scoped page baseline. Local font and #rp reset do not alter the surrounding application. */
+@font-face { font-family:NglobReferralInter; font-style:normal; font-weight:100 900; font-display:swap; src:url("./assets/inter-latin.woff2") format("woff2"); }
+#rp { font-family:NglobReferralInter,Arial,sans-serif; font-size:16px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+:where(#rp) :where(*,::before,::after) { box-sizing:border-box; border-width:0; border-style:solid; }
+:where(#rp) :where(h1,h2,h3,h4,p,figure,blockquote,dl,dd) { margin:0; }
+:where(#rp) :where(a) { color:inherit; text-decoration:inherit; }
+:where(#rp) :where(button,input,select,textarea) { font:inherit; letter-spacing:inherit; color:inherit; border-radius:0; background:transparent; opacity:1; }
+:where(#rp) :where(button,[type=button],[type=reset],[type=submit]) { appearance:button; cursor:pointer; }
+:where(#rp) :where(img,svg,video) { display:block; vertical-align:middle; }
+:where(#rp) :where(img,video) { max-width:100%; height:auto; }
+:where(#rp) :where(ol,ul) { list-style:none; margin:0; padding:0; }
+:where(#rp) :where(textarea) { resize:vertical; }
+:where(#rp) :where(summary) { display:list-item; }
+:where(#rp) :where([hidden]) { display:none!important; }
