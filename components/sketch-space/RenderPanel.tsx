@@ -17,6 +17,7 @@ import {
   BUILTIN_MATERIALS,
   isValidScene,
 } from "./types";
+import { planFromPrompt } from "./templates";
 
 interface Props {
   sceneSummary: string;
@@ -25,6 +26,7 @@ interface Props {
   onExportGLB: () => Promise<void>;
   onExportSVG: () => void;
   onExportJSON: () => void;
+  onImportJSON?: (file: File) => void;
   onStartWalkthrough: () => void;
   onStopWalkthrough: () => void;
   isRecording: boolean;
@@ -56,108 +58,7 @@ function base64ToDataUrl(b64: string, mime: string): string {
   return `data:${mime};base64,${b64}`;
 }
 
-// ── Algorithmic Architectural Plan Generator (Feature F Fallback) ─────────────
-
-function generateAlgorithmicPlan(prompt: string): Scene {
-  const p = prompt.toLowerCase();
-  const is2Bed = p.includes("2 bed") || p.includes("two bed");
-  const isOffice = p.includes("office") || p.includes("workspace");
-
-  if (isOffice) {
-    return {
-      unit: "m",
-      canvas: { widthM: 14, depthM: 10, gridStep: 0.1 },
-      walls: [
-        { id: "w1", a: [0, 0], b: [14, 0] },
-        { id: "w2", a: [14, 0], b: [14, 10] },
-        { id: "w3", a: [14, 10], b: [0, 10] },
-        { id: "w4", a: [0, 10], b: [0, 0] },
-        { id: "w5", a: [7, 0], b: [7, 10] },
-      ],
-      rooms: [
-        { id: "r1", name: "Open Office", x: 0, z: 0, w: 7, d: 10, materialId: "polished-concrete" },
-        { id: "r2", name: "Conference Room", x: 7, z: 0, w: 7, d: 10, materialId: "cozy-carpet" },
-      ],
-      openings: [
-        { id: "o1", type: "door", at: [3.5, 0], w: 1.0, wallId: "w1" },
-        { id: "o2", type: "door", at: [7, 5], w: 0.9, wallId: "w5" },
-        { id: "o3", type: "window", at: [14, 5], w: 2.0, wallId: "w2" },
-      ],
-      items: [
-        { id: "i1", kind: "table", x: 3.5, z: 4, rot: 0 },
-        { id: "i2", kind: "chair", x: 3.5, z: 3.2, rot: 0 },
-        { id: "i3", kind: "table", x: 10.5, z: 5, rot: 0 },
-        { id: "i4", kind: "plant", x: 1, z: 1, rot: 0 },
-      ],
-    };
-  }
-
-  if (is2Bed) {
-    return {
-      unit: "m",
-      canvas: { widthM: 14, depthM: 10, gridStep: 0.1 },
-      walls: [
-        { id: "w1", a: [0, 0], b: [14, 0] },
-        { id: "w2", a: [14, 0], b: [14, 10] },
-        { id: "w3", a: [14, 10], b: [0, 10] },
-        { id: "w4", a: [0, 10], b: [0, 0] },
-        { id: "w5", a: [7, 0], b: [7, 10] },
-        { id: "w6", a: [7, 5], b: [14, 5] },
-      ],
-      rooms: [
-        { id: "r1", name: "Living & Kitchen", x: 0, z: 0, w: 7, d: 10, materialId: "oak-wood" },
-        { id: "r2", name: "Primary Bedroom", x: 7, z: 0, w: 7, d: 5, materialId: "cozy-carpet" },
-        { id: "r3", name: "Second Bedroom", x: 7, z: 5, w: 7, d: 5, materialId: "oak-wood" },
-      ],
-      openings: [
-        { id: "o1", type: "door", at: [3.5, 0], w: 0.9, wallId: "w1" },
-        { id: "o2", type: "door", at: [7, 2.5], w: 0.85, wallId: "w5" },
-        { id: "o3", type: "door", at: [7, 7.5], w: 0.85, wallId: "w5" },
-        { id: "o4", type: "window", at: [3.5, 10], w: 2.0, wallId: "w3" },
-        { id: "o5", type: "window", at: [14, 2.5], w: 1.5, wallId: "w2" },
-      ],
-      items: [
-        { id: "i1", kind: "sofa", x: 3.5, z: 7, rot: 0 },
-        { id: "i2", kind: "tv", x: 3.5, z: 9.5, rot: 0 },
-        { id: "i3", kind: "kitchen", x: 3.5, z: 1.5, rot: 0 },
-        { id: "i4", kind: "bed", x: 10.5, z: 2.5, rot: 0 },
-        { id: "i5", kind: "bed", x: 10.5, z: 7.5, rot: 0 },
-        { id: "i6", kind: "plant", x: 0.8, z: 8.5, rot: 0 },
-      ],
-    };
-  }
-
-  // 1-Bed Flat / Studio Default
-  return {
-    unit: "m",
-    canvas: { widthM: 10, depthM: 8, gridStep: 0.1 },
-    walls: [
-      { id: "w1", a: [0, 0], b: [10, 0] },
-      { id: "w2", a: [10, 0], b: [10, 8] },
-      { id: "w3", a: [10, 8], b: [0, 8] },
-      { id: "w4", a: [0, 8], b: [0, 0] },
-      { id: "w5", a: [5, 0], b: [5, 8] },
-    ],
-    rooms: [
-      { id: "r1", name: "Living Room", x: 0, z: 0, w: 5, d: 8, materialId: "oak-wood" },
-      { id: "r2", name: "Bedroom", x: 5, z: 0, w: 5, d: 8, materialId: "cozy-carpet" },
-    ],
-    openings: [
-      { id: "o1", type: "door", at: [2.5, 0], w: 0.9, wallId: "w1" },
-      { id: "o2", type: "door", at: [5, 4], w: 0.85, wallId: "w5" },
-      { id: "o3", type: "window", at: [2.5, 8], w: 1.6, wallId: "w3" },
-      { id: "o4", type: "window", at: [10, 4], w: 1.4, wallId: "w2" },
-    ],
-    items: [
-      { id: "i1", kind: "sofa", x: 2.5, z: 5, rot: 0 },
-      { id: "i2", kind: "bed", x: 7.5, z: 4, rot: 0 },
-      { id: "i3", kind: "wardrobe", x: 7.5, z: 1.5, rot: 0 },
-      { id: "i4", kind: "plant", x: 0.8, z: 6.8, rot: 0 },
-    ],
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
 
 export function RenderPanel({
   sceneSummary,
@@ -166,6 +67,7 @@ export function RenderPanel({
   onExportGLB,
   onExportSVG,
   onExportJSON,
+  onImportJSON,
   onStartWalkthrough,
   onStopWalkthrough,
   isRecording,
@@ -214,7 +116,14 @@ export function RenderPanel({
     }
   }, [sceneData, selectedRoomId]);
 
+  const sceneIsEmpty = !sceneData || (!sceneData.walls.length && !sceneData.rooms.length && !sceneData.items.length);
+
   async function handleRender() {
+    if (sceneIsEmpty) {
+      setStatus("error");
+      setError("Draw a room or load a starter plan first — there is nothing to render yet.");
+      return;
+    }
     setStatus("loading");
     setError("");
     setProgress(0);
@@ -294,8 +203,9 @@ export function RenderPanel({
     try {
       // Attempt backend endpoint first
       let plan: Scene | null = null;
+      let fallbackLabel = "";
       try {
-        const res = await fetch("http://localhost:4000/text-to-sketch/plan", {
+        const res = await fetch(`${API_URL}/text-to-sketch/plan`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: aiPrompt }),
@@ -311,13 +221,19 @@ export function RenderPanel({
       }
 
       if (!plan) {
-        plan = generateAlgorithmicPlan(aiPrompt);
+        const picked = planFromPrompt(aiPrompt);
+        plan = picked.scene;
+        fallbackLabel = picked.template.label;
       }
 
       if (plan && onLoadGeneratedPlan) {
         onLoadGeneratedPlan(plan);
         setAiGenStatus("done");
-        setAiGenMsg(`Generated plan with ${plan.rooms.length} rooms and ${plan.walls.length} walls!`);
+        setAiGenMsg(
+          fallbackLabel
+            ? `The plan service is offline, so we loaded the closest starter plan (${fallbackLabel}). Edit it on the canvas, or press Ctrl+Z to go back.`
+            : `Plan loaded: ${plan.rooms.length} rooms, ${plan.walls.length} walls. Press Ctrl+Z to go back.`
+        );
       }
     } catch (e) {
       setAiGenStatus("error");
@@ -544,7 +460,7 @@ export function RenderPanel({
       {activeTab === "ai-gen" && (
         <div className="sk-panel-section">
           <div className="sk-panel-heading">
-            <span className="sk-panel-eyebrow">Claude MCP & Generative Plan</span>
+            <span className="sk-panel-eyebrow">Generative plan</span>
             <h2 className="sk-panel-title">Text to Floor Plan</h2>
           </div>
           <p style={{ fontSize: "12px", color: "#a0a595", marginBottom: "8px" }}>
@@ -690,7 +606,7 @@ export function RenderPanel({
             </>
           ) : (
             <p style={{ fontSize: "12px", color: "#999" }}>
-              Draw at least one room on the canvas using the Room tool (R) to apply floor textures.
+              Draw a room with the Room tool (R) first, then pick its floor finish here — or select a room on the canvas to change it there.
             </p>
           )}
         </div>
@@ -792,8 +708,23 @@ export function RenderPanel({
             <span className="sk-export-icon">⬡</span> SVG plan
           </button>
           <button type="button" className="sk-export-btn" onClick={onExportJSON} aria-label="Export project JSON">
-            <span className="sk-export-icon">{ }</span> JSON
+            <span className="sk-export-icon">{"{ }"}</span> Save JSON
           </button>
+          {onImportJSON && (
+            <label className="sk-export-btn" aria-label="Open a saved project JSON file">
+              <span className="sk-export-icon">↥</span> Open JSON
+              <input
+                type="file"
+                accept="application/json,.json"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onImportJSON(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          )}
           <button type="button" className="sk-export-btn" onClick={onExportGLB} aria-label="Export scene as GLB 3D model">
             <span className="sk-export-icon">⬢</span> GLB
           </button>
