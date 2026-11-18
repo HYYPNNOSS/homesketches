@@ -200,7 +200,6 @@ const COLORS = {
   wallTop: 0x2e3128,
   wallSide: 0x3d4234,
   wallEdge: 0x1e2019,
-  wall3d: 0xe9e6dc,
   floor: 0xf2f0e6,
   furniture: 0x8a9a6a,
   furnitureEdge: 0x5a6a3a,
@@ -229,7 +228,7 @@ type Listener = (data?: unknown) => void;
 
 export interface SelectionChangeData {
   id: string | null;
-  type: "item" | "wall" | "opening" | "camera" | "room" | null;
+  type: "item" | "wall" | "opening" | "camera" | null;
   screenX: number;
   screenY: number;
 }
@@ -243,7 +242,6 @@ export class SketchEngine {
   private perspCamera: THREE.PerspectiveCamera;
   private controls: OrbitControls | null = null;
   private frameId = 0;
-  private sun: THREE.DirectionalLight | null = null;
   private listeners: Map<EngineEventType, Set<Listener>> = new Map();
 
   // Drawing state
@@ -277,9 +275,7 @@ export class SketchEngine {
   private ghostDim: THREE.Sprite | null = null;
   private roomStart: Vec2 | null = null;
   private selectedId: string | null = null;
-  private selectedType: "item" | "wall" | "opening" | "camera" | "camera-target" | "room" | null = null;
-  // First point of the wall chain being drawn — clicking it again closes the loop
-  private chainOrigin: Vec2 | null = null;
+  private selectedType: "item" | "wall" | "opening" | "camera" | "camera-target" | null = null;
   private isDragging = false;
   private dragOffset: Vec2 = [0, 0];
   private lengthOverride: number | null = null; // metres, typed by user
@@ -361,15 +357,6 @@ export class SketchEngine {
     const sun = new THREE.DirectionalLight(0xfff8ec, 1.2);
     sun.position.set(10, 20, 8);
     sun.castShadow = true;
-    // Cover a whole house, not just the default 10 m box, so shadows are not cut off
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -40;
-    sun.shadow.camera.right = 40;
-    sun.shadow.camera.top = 40;
-    sun.shadow.camera.bottom = -40;
-    sun.shadow.camera.far = 120;
-    sun.shadow.bias = -0.0005;
-    this.sun = sun;
     this.scene3d.add(ambient, sun);
 
     // Grid
@@ -403,10 +390,6 @@ export class SketchEngine {
 
     // Load autosave
     this.loadAutosave();
-
-    // Top view needs its own pan controls from the first frame, framed on the plan
-    this.setView("top");
-    this.fitView(false);
 
     // Start loop
     this.tick();
@@ -683,8 +666,9 @@ export class SketchEngine {
 
     if (mode === "top") {
       this.camera = this.orthoCamera;
+      this.orthoCamera.position.set(0, 20, 0);
+      this.orthoCamera.lookAt(0, 0, 0);
       this.scene3d.background = new THREE.Color(0xf5f4ef);
-      this.controls?.dispose();
       this.controls = new OrbitControls(this.orthoCamera, this.canvas);
       this.controls.listenToKeyEvents(window); // Allow arrow keys to pan
       this.controls.enableRotate = false;
@@ -705,22 +689,23 @@ export class SketchEngine {
     } else if (mode === "perspective") {
       this.camera = this.perspCamera;
       const fromPos = this.perspCamera.position.clone();
-      const fromTarget = prevMode === "top" ? new THREE.Vector3(0, 0, 0) : this.controls?.target.clone() ?? new THREE.Vector3(0, 0, 0);
-      const { pos: toPos, target: toTarget } = this.perspectiveFraming();
+      const toPos = new THREE.Vector3(8, 8, 12);
+      const fromTarget = this.controls?.target.clone() ?? new THREE.Vector3(0, 0, 0);
+      const toTarget = new THREE.Vector3(0, 0, 0);
       this.scene3d.background = new THREE.Color(0xd8e4f0);
       this.setupControls();
       if (prevMode !== "perspective") {
         this.tweenCamera(fromPos, toPos, fromTarget, toTarget);
       } else {
         this.perspCamera.position.copy(toPos);
-        this.controls?.target.copy(toTarget);
       }
     } else {
       // eye-level
       this.camera = this.perspCamera;
       const fromPos = this.perspCamera.position.clone();
-      const fromTarget = prevMode === "top" ? new THREE.Vector3(0, EYE_LEVEL, 0) : this.controls?.target.clone() ?? new THREE.Vector3(0, EYE_LEVEL, 0);
-      const { pos: toPos, target: toTarget } = this.eyeLevelFraming();
+      const toPos = new THREE.Vector3(0, EYE_LEVEL, 6);
+      const fromTarget = this.controls?.target.clone() ?? new THREE.Vector3(0, EYE_LEVEL, 0);
+      const toTarget = new THREE.Vector3(0, EYE_LEVEL, 0);
       this.scene3d.background = new THREE.Color(0xd8e4f0);
       this.setupControls();
       if (prevMode !== "eye-level") {
@@ -733,128 +718,7 @@ export class SketchEngine {
     if (prevMode !== mode) {
       this.rebuildScene();
     }
-    if (mode === "top") {
-      // Keep the user's pan/zoom: aim the new controls straight down from where the camera already is
-      const { x, z } = this.orthoCamera.position;
-      this.orthoCamera.position.set(x, 20, z);
-      this.orthoCamera.lookAt(x, 0, z);
-      this.controls?.target.set(x, 0, z);
-    }
-    // A flat plan reads best without cast shadows; keep them for the 3D views
-    if (this.sun) this.sun.castShadow = mode !== "top";
-    this.updateCursor();
     this.emit("view-change", mode);
-  }
-
-  // ─── Framing / zoom ──────────────────────────────────────────────────────────
-
-  /** Bounding box of everything drawn on the active floor, or the sheet when empty. */
-  getContentBounds(): { minX: number; minZ: number; maxX: number; maxZ: number; empty: boolean } {
-    const s = this.sceneData;
-    const pts: Vec2[] = [];
-    for (const w of s.walls) pts.push(w.a, w.b);
-    for (const r of s.rooms) pts.push([r.x, r.z], [r.x + r.w, r.z + r.d]);
-    for (const it of s.items) pts.push([it.x, it.z]);
-    if (!pts.length) {
-      const cb = this.getCanvasBounds();
-      return { minX: -cb.widthM / 2, minZ: -cb.depthM / 2, maxX: cb.widthM / 2, maxZ: cb.depthM / 2, empty: true };
-    }
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-    for (const [x, z] of pts) {
-      minX = Math.min(minX, x); minZ = Math.min(minZ, z);
-      maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z);
-    }
-    return { minX, minZ, maxX, maxZ, empty: false };
-  }
-
-  private activeElevation(): number {
-    return this.projectData.floors.find((f) => f.id === this.projectData.activeFloorId)?.elevationM ?? 0;
-  }
-
-  private perspectiveFraming(): { pos: THREE.Vector3; target: THREE.Vector3 } {
-    const b = this.getContentBounds();
-    const y = this.activeElevation();
-    const cx = (b.minX + b.maxX) / 2;
-    const cz = (b.minZ + b.maxZ) / 2;
-    const size = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 4);
-    const d = size * 0.95 + 3;
-    return {
-      pos: new THREE.Vector3(cx + d * 0.55, y + d * 0.7, cz + d * 0.8),
-      target: new THREE.Vector3(cx, y + 0.6, cz),
-    };
-  }
-
-  private eyeLevelFraming(): { pos: THREE.Vector3; target: THREE.Vector3 } {
-    const y = this.activeElevation() + EYE_LEVEL;
-    // Start inside the largest room, looking down its long side
-    const room = [...this.sceneData.rooms].sort((a, b) => b.w * b.d - a.w * a.d)[0];
-    if (room) {
-      const cx = room.x + room.w / 2;
-      const cz = room.z + room.d / 2;
-      if (room.w >= room.d) {
-        const px = room.x + Math.min(room.w * 0.2, 1.2);
-        return { pos: new THREE.Vector3(px, y, cz), target: new THREE.Vector3(px + 1.5, y, cz) };
-      }
-      const pz = room.z + room.d - Math.min(room.d * 0.2, 1.2);
-      return { pos: new THREE.Vector3(cx, y, pz), target: new THREE.Vector3(cx, y, pz - 1.5) };
-    }
-    const b = this.getContentBounds();
-    const cx = (b.minX + b.maxX) / 2;
-    const cz = (b.minZ + b.maxZ) / 2;
-    const standZ = b.empty ? cz + 4 : b.maxZ + 3;
-    return { pos: new THREE.Vector3(cx, y, standZ), target: new THREE.Vector3(cx, y, standZ - 1.5) };
-  }
-
-  /** Frame the whole plan in the current view. */
-  fitView(animate = true) {
-    if (this.activeView === "top") {
-      const b = this.getContentBounds();
-      const cx = (b.minX + b.maxX) / 2;
-      const cz = (b.minZ + b.maxZ) / 2;
-      const w = this.canvas.clientWidth || 1;
-      const h = this.canvas.clientHeight || 1;
-      const aspect = w / h;
-      const margin = b.empty ? 1.08 : 1.35;
-      const half = Math.max(((b.maxZ - b.minZ) / 2) * margin, ((b.maxX - b.minX) / 2 / aspect) * margin, 2);
-      // Visible half-height is 10 / zoom² (see onResize + three's own zoom division)
-      this.orthoCamera.zoom = Math.max(0.5, Math.min(20, Math.sqrt(10 / half)));
-      this.orthoCamera.position.set(cx, 20, cz);
-      this.orthoCamera.lookAt(cx, 0, cz);
-      this.controls?.target.set(cx, 0, cz);
-      this.onResize();
-      return;
-    }
-    const { pos, target } = this.activeView === "perspective" ? this.perspectiveFraming() : this.eyeLevelFraming();
-    if (animate) {
-      this.tweenCamera(this.perspCamera.position.clone(), pos, this.controls?.target.clone() ?? target.clone(), target);
-    } else {
-      this.perspCamera.position.copy(pos);
-      this.controls?.target.copy(target);
-    }
-  }
-
-  /** Zoom in (factor > 1) or out (factor < 1) in whichever view is active. */
-  zoomBy(factor: number) {
-    if (this.activeView === "top") {
-      // zoom is applied twice (frustum + projection), so take the root to keep steps even
-      this.orthoCamera.zoom = Math.max(0.5, Math.min(20, this.orthoCamera.zoom * Math.sqrt(factor)));
-      this.onResize();
-      return;
-    }
-    if (!this.controls) return;
-    const offset = new THREE.Vector3().subVectors(this.perspCamera.position, this.controls.target);
-    const len = Math.max(0.5, Math.min(120, offset.length() / factor));
-    offset.setLength(len);
-    this.perspCamera.position.copy(this.controls.target).add(offset);
-  }
-
-  private updateCursor() {
-    if (this.activeView !== "top") {
-      this.canvas.style.cursor = "grab";
-      return;
-    }
-    const map: Partial<Record<ToolKind, string>> = { select: "default", eraser: "not-allowed", furniture: "copy", label: "text" };
-    this.canvas.style.cursor = map[this.activeTool] ?? "crosshair";
   }
 
   // ─── Input binding ───────────────────────────────────────────────────────────
@@ -978,14 +842,8 @@ export class SketchEngine {
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
-    const t = e.target;
-    if (
-      t instanceof HTMLInputElement ||
-      t instanceof HTMLTextAreaElement ||
-      t instanceof HTMLSelectElement ||
-      (t instanceof HTMLElement && t.isContentEditable)
-    ) return;
-
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    
     this.keysPressed.add(e.code);
 
     if (this.activeView === "eye-level" && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) {
@@ -1001,58 +859,29 @@ export class SketchEngine {
       }
       return;
     }
-
-    const key = e.key.toLowerCase();
-    const mod = e.ctrlKey || e.metaKey;
-
-    if (mod && key === "z") {
+    if ((e.ctrlKey || e.metaKey) && e.key === "z") {
       e.preventDefault();
       if (e.shiftKey) this.redo(); else this.undo();
-      return;
     }
-    if (mod && key === "y") {
-      e.preventDefault();
-      this.redo();
-      return;
-    }
-    if (mod && key === "d") {
-      e.preventDefault();
-      this.duplicateSelected();
-      return;
-    }
-    if (mod || e.altKey) return;
-
-    if (e.key === "Escape" || e.key === "Enter") {
+    if (e.key === "Escape") {
       this.cancelTool();
-      return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {
       this.deleteSelected();
-      return;
     }
-
-    // View shortcuts: 1 = plan, 2 = 3D, 3 = walk, 0 = fit
-    if (key === "1") return this.setView("top");
-    if (key === "2") return this.setView("perspective");
-    if (key === "3") return this.setView("eye-level");
-    if (key === "0") return this.fitView();
-    if (key === "+" || key === "=") return this.zoomBy(1.25);
-    if (key === "-") return this.zoomBy(0.8);
-
-    // In walk mode W/A/S/D/Q/E move the camera, so they must not switch tools
-    if (this.activeView === "eye-level") return;
-
-    // R rotates the selected furniture; otherwise it picks the room tool
-    if (key === "r" && this.activeTool === "select" && this.selectedType === "item") {
-      this.rotateSelected();
-      return;
-    }
-
+    // Tool shortcuts
     const shortcuts: Record<string, ToolKind> = {
       w: "wall", r: "room", d: "door", n: "window", f: "furniture",
       l: "label", e: "eraser", v: "select", c: "camera",
     };
-    if (shortcuts[key]) this.setTool(shortcuts[key]);
+    if (!e.ctrlKey && !e.metaKey && shortcuts[e.key]) {
+      this.setTool(shortcuts[e.key]);
+    }
+    
+    // Rotate furniture — only when select tool is active to avoid conflict with "R" → room shortcut (B-7)
+    if ((e.key === "r" || e.key === "R") && this.activeTool === "select") {
+      this.rotateSelected();
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
@@ -1071,16 +900,7 @@ export class SketchEngine {
 
   setTool(tool: ToolKind) {
     this.cancelTool();
-    const hadSelection = this.selectedId !== null;
-    if (tool !== "select" && hadSelection) {
-      this.selectedId = null;
-      this.selectedType = null;
-    }
-    const handlesChanged = (this.activeTool === "select") !== (tool === "select");
     this.activeTool = tool;
-    this.updateCursor();
-    // Endpoint handles and selection outlines depend on the tool
-    if (handlesChanged || hadSelection) this.rebuildScene();
     this.emit("tool-change", tool);
   }
 
@@ -1099,7 +919,6 @@ export class SketchEngine {
   private cancelTool() {
     this.drawing = false;
     this.wallStart = null;
-    this.chainOrigin = null;
     this.roomStart = null;
     this.cameraStart = null;
     this.isDragging = false;
@@ -1115,20 +934,10 @@ export class SketchEngine {
         if (!this.drawing) {
           this.drawing = true;
           this.wallStart = pos;
-          this.chainOrigin = pos;
         } else {
-          // Each click adds a wall and chains the next one from its end
-          const origin = this.chainOrigin;
+          // Second click finalises wall
           const end = this.commitWall(this.wallStart!, pos);
-          if (!end) {
-            // Clicked the same spot again (double-click) — finish the chain
-            this.cancelTool();
-          } else if (origin && dist(end, origin) < 0.05) {
-            // Back at the first point — the outline is closed
-            this.cancelTool();
-          } else {
-            this.wallStart = end;
-          }
+          if (end) this.wallStart = end; // chain next wall from here
         }
         break;
       case "room":
@@ -1184,11 +993,6 @@ export class SketchEngine {
         this.dragCameraTarget(pos);
         return;
       }
-      if (this.selectedType === "room") {
-        this.dragRoom(pos);
-        return;
-      }
-      if (this.selectedType !== "item") return;
       this.dragItem(pos);
       return;
     }
@@ -1222,16 +1026,10 @@ export class SketchEngine {
     }
     if (this.isDragging) {
       this.isDragging = false;
-      // A plain click (no movement) should not add an undo step
-      if (this.dragMoved) {
-        this.pushHistory();
-        this.emit("scene-change", this.sceneData);
-      }
-      this.dragMoved = false;
+      this.pushHistory();
+      this.emit("scene-change", this.sceneData);
     }
   }
-
-  private dragMoved = false;
 
   // ─── Tool commits ────────────────────────────────────────────────────────────
 
@@ -1268,21 +1066,8 @@ export class SketchEngine {
     const w = Math.abs(clampedB[0] - clampedA[0]);
     const d = Math.abs(clampedB[1] - clampedA[1]);
     if (w < 0.2 || d < 0.2) return;
-    const room: Room = { id: nanoid(), name: `Room ${this.sceneData.rooms.length + 1}`, x, z, w, d };
-    // A room is enclosed by walls so it reads as a real space in 3D.
-    // Edges that already have a wall (e.g. shared with a neighbouring room) are skipped.
-    const corners: Vec2[] = [[x, z], [x + w, z], [x + w, z + d], [x, z + d]];
-    const newWalls: Wall[] = [];
-    for (let i = 0; i < 4; i++) {
-      const p = corners[i];
-      const q = corners[(i + 1) % 4];
-      if (!this.hasWallCovering(p, q)) newWalls.push({ id: nanoid(), a: p, b: q });
-    }
-    this.sceneData = {
-      ...this.sceneData,
-      rooms: [...this.sceneData.rooms, room],
-      walls: [...this.sceneData.walls, ...newWalls],
-    };
+    const room: Room = { id: nanoid(), name: "Room", x, z, w, d };
+    this.sceneData = { ...this.sceneData, rooms: [...this.sceneData.rooms, room] };
     this.clearGhost();
     this.pushHistory();
     this.rebuildScene();
@@ -1333,74 +1118,23 @@ export class SketchEngine {
     this.emit("scene-change", this.sceneData);
   }
 
-  /** True when an existing wall already runs along the whole segment p→q. */
-  private hasWallCovering(p: Vec2, q: Vec2): boolean {
-    const EPS = 0.06;
-    const distToWall = (pt: Vec2, wall: Wall) => {
-      const dx = wall.b[0] - wall.a[0];
-      const dz = wall.b[1] - wall.a[1];
-      const l2 = dx * dx + dz * dz;
-      if (l2 === 0) return dist(pt, wall.a);
-      const t = Math.max(0, Math.min(1, ((pt[0] - wall.a[0]) * dx + (pt[1] - wall.a[1]) * dz) / l2));
-      return Math.hypot(pt[0] - (wall.a[0] + t * dx), pt[1] - (wall.a[1] + t * dz));
-    };
-    return this.sceneData.walls.some((wall) => distToWall(p, wall) < EPS && distToWall(q, wall) < EPS);
-  }
-
-  private itemAt(pos: Vec2): Item | undefined {
-    // Topmost (last drawn) first; labels and tiny items get a generous hit radius
-    for (let i = this.sceneData.items.length - 1; i >= 0; i--) {
-      const it = this.sceneData.items[i];
-      const [w, d] = FURNITURE_SIZES[it.kind];
-      const sc = it.scale ?? 1;
-      const dx = pos[0] - it.x;
-      const dz = pos[1] - it.z;
-      // Into the item's local frame
-      const c = Math.cos(it.rot);
-      const sn = Math.sin(it.rot);
-      const lx = dx * c - dz * sn;
-      const lz = dx * sn + dz * c;
-      const hw = Math.max((w * sc) / 2, 0.35);
-      const hd = Math.max((d * sc) / 2, 0.35);
-      if (Math.abs(lx) <= hw && Math.abs(lz) <= hd) return it;
-    }
-    return undefined;
-  }
-
-  private roomAt(pos: Vec2): Room | undefined {
-    for (let i = this.sceneData.rooms.length - 1; i >= 0; i--) {
-      const r = this.sceneData.rooms[i];
-      if (pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.z && pos[1] <= r.z + r.d) return r;
-    }
-    return undefined;
-  }
-
-  /** Erase only the single topmost thing under the cursor. */
   private eraseAt(pos: Vec2) {
-    const s = this.sceneData;
-    const item = this.itemAt(pos);
-    const opening = item ? undefined : s.openings.find((o) => dist(pos, o.at) < 0.45);
-    const wall = item || opening ? null : this.nearestWall(pos, 0.3);
-    const cam = item || opening || wall ? undefined : s.virtualCameras?.find((c) => dist(pos, c.position) < 0.5);
-    const room = item || opening || wall || cam ? undefined : this.roomAt(pos);
-
-    if (item) {
-      this.sceneData = { ...s, items: s.items.filter((it) => it.id !== item.id) };
-    } else if (opening) {
-      this.sceneData = { ...s, openings: s.openings.filter((o) => o.id !== opening.id) };
-    } else if (wall) {
-      this.sceneData = {
-        ...s,
-        walls: s.walls.filter((w) => w.id !== wall.id),
-        openings: s.openings.filter((o) => o.wallId !== wall.id),
-      };
-    } else if (cam) {
-      this.sceneData = { ...s, virtualCameras: (s.virtualCameras ?? []).filter((c) => c.id !== cam.id) };
-    } else if (room) {
-      this.sceneData = { ...s, rooms: s.rooms.filter((r) => r.id !== room.id) };
-    } else {
-      return;
-    }
+    const thr = 0.5;
+    const snap = (a: Vec2, b: Vec2) => {
+      const dx = a[0] - b[0];
+      const dz = a[1] - b[1];
+      return Math.sqrt(dx * dx + dz * dz);
+    };
+    const walls = this.sceneData.walls.filter((w) => {
+      const mid = wallMid(w);
+      return snap(pos, mid) > thr;
+    });
+    const rooms = this.sceneData.rooms.filter((r) => {
+      return !(pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.z && pos[1] <= r.z + r.d);
+    });
+    const items = this.sceneData.items.filter((it) => snap(pos, [it.x, it.z]) > thr);
+    const openings = this.sceneData.openings.filter((o) => snap(pos, o.at) > thr);
+    this.sceneData = { ...this.sceneData, walls, rooms, items, openings };
     this.pushHistory();
     this.rebuildScene();
     this.emit("scene-change", this.sceneData);
@@ -1410,15 +1144,21 @@ export class SketchEngine {
 
   private selectAt(pos: Vec2, e: PointerEvent) {
     this.lastPointerEvent = { clientX: e.clientX, clientY: e.clientY };
-    // Check wall endpoints first (wall endpoint dragging)
-    const EP = 0.25;
+    const thr = 0.7;
+    const dist = (a: Vec2, b: Vec2) => {
+      const dx = a[0] - b[0];
+      const dz = a[1] - b[1];
+      return Math.sqrt(dx * dx + dz * dz);
+    };
+
+    // Check wall endpoints first (within 0.4 m — wall endpoint dragging)
     for (const wall of this.sceneData.walls) {
-      if (dist(pos, wall.a) < EP) {
+      if (dist(pos, wall.a) < 0.4) {
         this.draggingWallId = wall.id;
         this.draggingEndpoint = "a";
         return;
       }
-      if (dist(pos, wall.b) < EP) {
+      if (dist(pos, wall.b) < 0.4) {
         this.draggingWallId = wall.id;
         this.draggingEndpoint = "b";
         return;
@@ -1431,7 +1171,6 @@ export class SketchEngine {
       this.selectedId = camTarget.id;
       this.selectedType = "camera-target";
       this.isDragging = true;
-      this.dragMoved = false;
       this.dragOffset = [pos[0] - camTarget.targetPosition[0], pos[1] - camTarget.targetPosition[1]];
       this.rebuildScene();
       this.emit("selection-change", {
@@ -1448,7 +1187,6 @@ export class SketchEngine {
       this.selectedId = cam.id;
       this.selectedType = "camera";
       this.isDragging = true;
-      this.dragMoved = false;
       this.dragOffset = [pos[0] - cam.position[0], pos[1] - cam.position[1]];
       this.rebuildScene();
       this.emit("selection-change", {
@@ -1460,49 +1198,50 @@ export class SketchEngine {
       return;
     }
 
-    const select = (id: string, type: "item" | "wall" | "opening" | "room") => {
-      this.selectedId = id;
-      this.selectedType = type;
+    // Items first
+    const item = this.sceneData.items.find((it) => dist(pos, [it.x, it.z]) < thr);
+    if (item) {
+      this.selectedId = item.id;
+      this.selectedType = "item";
+      this.isDragging = true;
+      this.dragOffset = [pos[0] - item.x, pos[1] - item.z];
       this.rebuildScene();
       this.emit("selection-change", {
-        id,
-        type,
+        id: item.id,
+        type: "item",
         screenX: e.clientX,
         screenY: e.clientY,
       } satisfies SelectionChangeData);
-    };
-
-    // Furniture and labels (by footprint)
-    const item = this.itemAt(pos);
-    if (item) {
-      this.isDragging = true;
-      this.dragMoved = false;
-      this.dragOffset = [pos[0] - item.x, pos[1] - item.z];
-      select(item.id, "item");
       return;
     }
 
-    // Doors and windows sit on walls, so test them before the wall itself
-    const opening = this.sceneData.openings.find((o) => dist(pos, o.at) < Math.max(0.35, o.w / 2));
-    if (opening) {
-      select(opening.id, "opening");
-      return;
-    }
-
-    // Walls — anywhere along their length
-    const wall = this.nearestWall(pos, 0.3);
+    // Walls (by midpoint)
+    const wall = this.sceneData.walls.find((w) => dist(pos, wallMid(w)) < thr);
     if (wall) {
-      select(wall.id, "wall");
+      this.selectedId = wall.id;
+      this.selectedType = "wall";
+      this.rebuildScene();
+      this.emit("selection-change", {
+        id: wall.id,
+        type: "wall",
+        screenX: e.clientX,
+        screenY: e.clientY,
+      } satisfies SelectionChangeData);
       return;
     }
 
-    // Rooms — click inside the floor area; drag to move
-    const room = this.roomAt(pos);
-    if (room) {
-      this.isDragging = true;
-      this.dragMoved = false;
-      this.dragOffset = [pos[0] - room.x, pos[1] - room.z];
-      select(room.id, "room");
+    // Openings (doors and windows)
+    const opening = this.sceneData.openings.find((o) => dist(pos, o.at) < thr);
+    if (opening) {
+      this.selectedId = opening.id;
+      this.selectedType = "opening";
+      this.rebuildScene();
+      this.emit("selection-change", {
+        id: opening.id,
+        type: "opening",
+        screenX: e.clientX,
+        screenY: e.clientY,
+      } satisfies SelectionChangeData);
       return;
     }
 
@@ -1512,41 +1251,8 @@ export class SketchEngine {
     this.emit("selection-change", { id: null, type: null, screenX: e.clientX, screenY: e.clientY });
   }
 
-  private dragRoom(pos: Vec2) {
-    if (!this.selectedId) return;
-    const room = this.sceneData.rooms.find((r) => r.id === this.selectedId);
-    if (!room) return;
-    const cb = this.getCanvasBounds();
-    const nx = Math.max(-cb.widthM / 2, Math.min(cb.widthM / 2 - room.w, snap(pos[0] - this.dragOffset[0])));
-    const nz = Math.max(-cb.depthM / 2, Math.min(cb.depthM / 2 - room.d, snap(pos[1] - this.dragOffset[1])));
-    const dx = nx - room.x;
-    const dz = nz - room.z;
-    if (Math.abs(dx) < 1e-6 && Math.abs(dz) < 1e-6) return;
-    this.dragMoved = true;
-    // Walls, openings and furniture that belong to the room travel with it
-    const EPS = 0.06;
-    const inside = (p: Vec2) =>
-      p[0] >= room.x - EPS && p[0] <= room.x + room.w + EPS && p[1] >= room.z - EPS && p[1] <= room.z + room.d + EPS;
-    const movedWalls = new Set<string>();
-    const walls = this.sceneData.walls.map((w) => {
-      if (!inside(w.a) || !inside(w.b)) return w;
-      movedWalls.add(w.id);
-      return { ...w, a: [w.a[0] + dx, w.a[1] + dz] as Vec2, b: [w.b[0] + dx, w.b[1] + dz] as Vec2 };
-    });
-    const openings = this.sceneData.openings.map((o) =>
-      o.wallId && movedWalls.has(o.wallId) ? { ...o, at: [o.at[0] + dx, o.at[1] + dz] as Vec2 } : o
-    );
-    const items = this.sceneData.items.map((it) =>
-      inside([it.x, it.z]) ? { ...it, x: it.x + dx, z: it.z + dz } : it
-    );
-    const rooms = this.sceneData.rooms.map((r) => (r.id === room.id ? { ...r, x: nx, z: nz } : r));
-    this.sceneData = { ...this.sceneData, walls, openings, items, rooms };
-    this.rebuildScene();
-  }
-
   private dragItem(pos: Vec2) {
     if (!this.selectedId) return;
-    this.dragMoved = true;
     const clamped = this.clampToBounds([pos[0] - this.dragOffset[0], pos[1] - this.dragOffset[1]]);
     const items = this.sceneData.items.map((it) =>
       it.id === this.selectedId
@@ -1559,7 +1265,6 @@ export class SketchEngine {
 
   private dragCamera(pos: Vec2) {
     if (!this.selectedId) return;
-    this.dragMoved = true;
     const newPos = this.clampToBounds([pos[0] - this.dragOffset[0], pos[1] - this.dragOffset[1]]);
     const currentCam = this.sceneData.virtualCameras?.find((c) => c.id === this.selectedId);
     if (!currentCam) return;
@@ -1579,7 +1284,6 @@ export class SketchEngine {
 
   private dragCameraTarget(pos: Vec2) {
     if (!this.selectedId) return;
-    this.dragMoved = true;
     const newTarget = this.clampToBounds([pos[0] - this.dragOffset[0], pos[1] - this.dragOffset[1]]);
     const cameras = (this.sceneData.virtualCameras ?? []).map((c) =>
       c.id === this.selectedId ? { ...c, targetPosition: newTarget } : c
@@ -1601,22 +1305,8 @@ export class SketchEngine {
     this.rebuildScene();
   }
 
-  /** Copy the selected furniture item next to itself and select the copy. */
-  duplicateSelected() {
-    if (!this.selectedId || this.selectedType !== "item") return;
-    const src = this.sceneData.items.find((it) => it.id === this.selectedId);
-    if (!src) return;
-    const [nx, nz] = this.clampToBounds([src.x + 0.5, src.z + 0.5]);
-    const copy: Item = { ...src, id: nanoid(), x: nx, z: nz };
-    this.sceneData = { ...this.sceneData, items: [...this.sceneData.items, copy] };
-    this.selectedId = copy.id;
-    this.pushHistory();
-    this.rebuildScene();
-    this.emit("scene-change", this.sceneData);
-  }
-
   rotateSelected() {
-    if (!this.selectedId || this.selectedType !== "item") return;
+    if (!this.selectedId) return;
     const items = this.sceneData.items.map((it) => {
       if (it.id === this.selectedId) {
         return { ...it, rot: it.rot + Math.PI / 4 }; // Rotate by 45 degrees
@@ -1636,8 +1326,7 @@ export class SketchEngine {
       walls: this.sceneData.walls.filter((w) => w.id !== this.selectedId),
       rooms: this.sceneData.rooms.filter((r) => r.id !== this.selectedId),
       items: this.sceneData.items.filter((it) => it.id !== this.selectedId),
-      // Doors and windows go with the wall they were cut into
-      openings: this.sceneData.openings.filter((o) => o.id !== this.selectedId && o.wallId !== this.selectedId),
+      openings: this.sceneData.openings.filter((o) => o.id !== this.selectedId),
       virtualCameras: (this.sceneData.virtualCameras ?? []).filter((c) => c.id !== this.selectedId),
     };
     this.selectedId = null;
@@ -1960,9 +1649,7 @@ export class SketchEngine {
       return;
     }
 
-    // Plan view keeps the dark drafting line; in 3D an unpainted wall is light plaster,
-    // otherwise interiors read as solid black
-    const wallColor = wall.color ?? (this.activeView === "top" ? COLORS.wallSide : COLORS.wall3d);
+    const wallColor = wall.color ?? COLORS.wallSide;
     const mat = new THREE.MeshLambertMaterial({ color: wallColor });
 
     // Openings on this wall (Feature C.5: split-geometry cutouts)
@@ -2083,7 +1770,7 @@ export class SketchEngine {
     const edgeMat = new THREE.MeshBasicMaterial({ color: COLORS.wallTop });
     const edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
     edgeMesh.rotation.y = angle;
-    edgeMesh.position.set(mid[0], yOffset + h - 0.012, mid[1]); // sits just proud of the wall top (no z-fighting)
+    edgeMesh.position.set(mid[0], yOffset + h - 0.02, mid[1]);
     this.wallGroup.add(edgeMesh);
 
     // Selection highlight
@@ -2093,27 +1780,23 @@ export class SketchEngine {
       const selectMesh = new THREE.Mesh(selectGeo, selectMat);
       selectMesh.rotation.y = angle;
       selectMesh.position.set(mid[0], yOffset + h / 2, mid[1]);
-      selectMesh.userData.helper = true;
       this.wallGroup.add(selectMesh);
     }
 
-    // Endpoint handles (plan view, select mode)
-    if (this.activeTool === "select" && this.activeView === "top") {
+    // Endpoint handles (visible in select mode)
+    if (this.activeTool === "select") {
       for (const ep of [wall.a, wall.b]) {
         const hGeo = new THREE.SphereGeometry(0.12, 8, 8);
         const hMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const hMesh = new THREE.Mesh(hGeo, hMat);
         hMesh.position.set(ep[0], yOffset + 0.12, ep[1]);
-        hMesh.userData.helper = true;
         this.wallGroup.add(hMesh);
       }
     }
 
-    // Dimension label — a drafting aid, so plan view only
-    if (this.activeView === "top") {
-      const dimPos: Vec2 = [mid[0], mid[1]];
-      this.addSceneDim(`${len.toFixed(2)}m`, dimPos, yOffset + 0.3);
-    }
+    // Dimension label
+    const dimPos: Vec2 = [mid[0], mid[1]];
+    this.addSceneDim(`${len.toFixed(2)}m`, dimPos, yOffset + 0.3);
   }
 
   private buildRoom3d(room: Room, yOffset = 0, isGhost = false) {
@@ -2149,21 +1832,13 @@ export class SketchEngine {
     if (!isGhost) {
       // Room outline
       const edges = new THREE.EdgesGeometry(geo);
-      const isSelected = room.id === this.selectedId;
-      const lineMat = new THREE.LineBasicMaterial({ color: isSelected ? COLORS.selected : 0x98a878 });
+      const lineMat = new THREE.LineBasicMaterial({ color: 0x98a878 });
       const line = new THREE.LineSegments(edges, lineMat);
       line.position.copy(mesh.position);
       this.roomGroup.add(line);
-      if (isSelected) {
-        const hiGeo = new THREE.BoxGeometry(room.w, 0.02, room.d);
-        const hi = new THREE.Mesh(hiGeo, new THREE.MeshBasicMaterial({ color: COLORS.selected, transparent: true, opacity: 0.22, depthWrite: false }));
-        hi.position.set(mesh.position.x, mesh.position.y + 0.012, mesh.position.z);
-        hi.userData.helper = true;
-        this.roomGroup.add(hi);
-      }
 
-      // Room label sprite — name and floor area (hidden when walking inside)
-      if (this.activeView !== "eye-level") this.addSceneDim(`${room.name} · ${(room.w * room.d).toFixed(1)} m²`, [room.x + room.w / 2, room.z + room.d / 2], yOffset + 0.15);
+      // Room label sprite
+      this.addSceneDim(room.name, [room.x + room.w / 2, room.z + room.d / 2], yOffset + 0.15);
     }
   }
 
@@ -2195,7 +1870,7 @@ export class SketchEngine {
 
   private buildItem3d(item: Item, yOffset = 0, isGhost = false) {
     if (item.kind === "label") {
-      if (!isGhost && this.activeView !== "eye-level") this.addSceneDim(item.label ?? "Label", [item.x, item.z], yOffset + 0.3);
+      if (!isGhost) this.addSceneDim(item.label ?? "Label", [item.x, item.z], yOffset + 0.3);
       return;
     }
     const [w, d] = FURNITURE_SIZES[item.kind];
@@ -2273,7 +1948,6 @@ export class SketchEngine {
       const overlapMat = new THREE.MeshBasicMaterial({ color: COLORS.overlap, wireframe: true });
       const overlapMesh = new THREE.Mesh(overlapGeo, overlapMat);
       overlapMesh.position.y = 0.4;
-      overlapMesh.userData.helper = true;
       group.add(overlapMesh);
     }
 
@@ -2282,27 +1956,23 @@ export class SketchEngine {
 
   private addSceneDim(text: string, pos: Vec2, yOffset: number) {
     const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d")!;
-    const FONT = "bold 28px system-ui";
-    // Size the label to its text so long room names are never clipped
-    ctx.font = FONT;
-    const W = Math.max(160, Math.ceil(ctx.measureText(text).width) + 44);
-    canvas.width = W;
+    canvas.width = 320;
     canvas.height = 80;
-    ctx.clearRect(0, 0, W, 80);
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, 320, 80);
     ctx.fillStyle = "rgba(30,32,25,0.78)";
-    ctx.roundRect(0, 0, W, 80, 8);
+    ctx.roundRect(0, 0, 320, 80, 8);
     ctx.fill();
     ctx.fillStyle = "#f0f0e8";
-    ctx.font = FONT;
+    ctx.font = "bold 28px system-ui";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(text, W / 2, 40);
+    ctx.fillText(text, 160, 40);
     const tex = new THREE.CanvasTexture(canvas);
     const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
     const sprite = new THREE.Sprite(mat);
     sprite.position.set(pos[0], yOffset, pos[1]);
-    sprite.scale.set((2 * W) / 320, 0.5, 1);
+    sprite.scale.set(2, 0.5, 1);
     this.dimGroup.add(sprite);
   }
 
@@ -2631,22 +2301,11 @@ export class SketchEngine {
     this.emit("history-change", { canUndo: this.historyIndex > 0, canRedo: false });
   }
 
-  private restoreHistoryEntry() {
-    const prevCanvas = JSON.stringify(this.sceneData.canvas);
-    this.sceneData = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
-    if (JSON.stringify(this.sceneData.canvas) !== prevCanvas) this.buildGrid(this.sceneData.canvas);
-    if (this.selectedId) {
-      this.selectedId = null;
-      this.selectedType = null;
-      this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
-    }
-    this.rebuildScene();
-  }
-
   undo() {
     if (this.historyIndex <= 0) return;
     this.historyIndex--;
-    this.restoreHistoryEntry();
+    this.sceneData = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
+    this.rebuildScene();
     this.emit("scene-change", this.sceneData);
     this.emit("history-change", {
       canUndo: this.historyIndex > 0,
@@ -2657,7 +2316,8 @@ export class SketchEngine {
   redo() {
     if (this.historyIndex >= this.history.length - 1) return;
     this.historyIndex++;
-    this.restoreHistoryEntry();
+    this.sceneData = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
+    this.rebuildScene();
     this.emit("scene-change", this.sceneData);
     this.emit("history-change", {
       canUndo: this.historyIndex > 0,
@@ -2671,65 +2331,24 @@ export class SketchEngine {
     return this.sceneData;
   }
 
-  /**
-   * Replace the active floor with the given scene. The plan is re-centred on the
-   * drawing sheet (generated plans start at 0,0 while the sheet is centred on the
-   * origin) and the sheet grows if the plan would not fit. Undoable.
-   */
   loadScene(scene: Scene) {
-    this.cancelTool();
-    this.selectedId = null;
-    this.selectedType = null;
-    this.sceneData = SketchEngine.centreScene(scene, this.getCanvasBounds());
-    this.syncActiveFloorScene();
-    this.buildGrid(this.sceneData.canvas);
+    this.sceneData = scene;
+    this.history = [];
+    this.historyIndex = -1;
     this.pushHistory();
     this.rebuildScene();
-    this.fitView(false);
-    this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
     this.emit("scene-change", this.sceneData);
   }
 
-  private static centreScene(scene: Scene, current: CanvasBounds): Scene {
-    const pts: Vec2[] = [];
-    for (const w of scene.walls) pts.push(w.a, w.b);
-    for (const r of scene.rooms) pts.push([r.x, r.z], [r.x + r.w, r.z + r.d]);
-    for (const it of scene.items) pts.push([it.x, it.z]);
-    const gridStep = scene.canvas?.gridStep ?? current.gridStep ?? SNAP_GRID;
-    if (!pts.length) {
-      return { ...scene, canvas: scene.canvas ?? { ...current } };
-    }
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-    for (const [x, z] of pts) {
-      minX = Math.min(minX, x); minZ = Math.min(minZ, z);
-      maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z);
-    }
-    const ox = snap((minX + maxX) / 2);
-    const oz = snap((minZ + maxZ) / 2);
-    const mv = (p: Vec2): Vec2 => [snap(p[0] - ox), snap(p[1] - oz)];
-    // Sheet = plan + 2 m of breathing room on every side, never smaller than 8 × 6 m
-    const widthM = Math.max(8, Math.ceil(maxX - minX + 4));
-    const depthM = Math.max(6, Math.ceil(maxZ - minZ + 4));
-    return {
-      ...scene,
-      canvas: { widthM, depthM, gridStep },
-      walls: scene.walls.map((w) => ({ ...w, a: mv(w.a), b: mv(w.b) })),
-      rooms: scene.rooms.map((r) => ({ ...r, x: snap(r.x - ox), z: snap(r.z - oz) })),
-      openings: scene.openings.map((o) => ({ ...o, at: mv(o.at) })),
-      items: scene.items.map((it) => ({ ...it, x: snap(it.x - ox), z: snap(it.z - oz) })),
-      virtualCameras: scene.virtualCameras?.map((c) => ({ ...c, position: mv(c.position), targetPosition: mv(c.targetPosition) })),
-    };
-  }
-
   clearScene() {
-    this.loadScene({ ...emptyScene(), canvas: { ...this.getCanvasBounds() } });
+    this.loadScene(emptyScene());
   }
 
   getSelectedId(): string | null {
     return this.selectedId;
   }
 
-  getSelectedType(): "item" | "wall" | "opening" | "camera" | "camera-target" | "room" | null {
+  getSelectedType(): "item" | "wall" | "opening" | "camera" | "camera-target" | null {
     return this.selectedType;
   }
 
@@ -2753,12 +2372,8 @@ export class SketchEngine {
     this.history = [];
     this.historyIndex = -1;
     this.pushHistory();
-    this.selectedId = null;
-    this.selectedType = null;
     this.buildGrid(this.sceneData.canvas);
     this.rebuildScene();
-    this.fitView(false);
-    this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
     this.emit("scene-change", this.sceneData);
   }
 
@@ -2949,12 +2564,15 @@ export class SketchEngine {
   // ─── Capture ─────────────────────────────────────────────────────────────────
 
   captureTopDown(): string {
+    const prev = this.activeView;
+    // Switch to top view for clean capture
     const prevBg = this.scene3d.background;
     this.scene3d.background = new THREE.Color(0xffffff);
     this.dimGroup.visible = true;
     this.renderer.render(this.scene3d, this.orthoCamera);
     const data = this.canvas.toDataURL("image/png");
     this.scene3d.background = prevBg;
+    if (prev !== "top") this.setView(prev);
     return data;
   }
 
@@ -3049,12 +2667,7 @@ export class SketchEngine {
       const exportGroup = new THREE.Group();
       exportGroup.add(this.wallGroup.clone());
       exportGroup.add(this.roomGroup.clone());
-      exportGroup.add(this.openingGroup.clone());
       exportGroup.add(this.itemGroup.clone());
-      // Selection outlines, drag handles and overlap warnings are editor-only
-      const helpers: THREE.Object3D[] = [];
-      exportGroup.traverse((obj) => { if (obj.userData.helper) helpers.push(obj); });
-      helpers.forEach((obj) => obj.parent?.remove(obj));
       exporter.parse(
         exportGroup,
         (result) => {
@@ -3103,30 +2716,27 @@ export class SketchEngine {
   }
 
   private animateWalkthroughPath() {
-    // One slow orbit around the plan, sized to what was drawn
-    if (this.activeView !== "perspective") this.setView("perspective");
-    const { target } = this.perspectiveFraming();
-    const b = this.getContentBounds();
-    const radius = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 4) * 0.85 + 4;
-    const height = target.y + radius * 0.55;
+    // Simple orbit animation
     const duration = 12000;
-    const start = performance.now();
+    const start = Date.now();
+    const radius = 12;
     const animate = () => {
       if (!this.isRecording) return;
-      const elapsed = performance.now() - start;
+      const elapsed = Date.now() - start;
       if (elapsed > duration) {
         this.stopWalkthrough();
         return;
       }
       const angle = (elapsed / duration) * Math.PI * 2;
-      this.controls?.target.copy(target);
       this.perspCamera.position.set(
-        target.x + Math.sin(angle) * radius,
-        height,
-        target.z + Math.cos(angle) * radius
+        Math.sin(angle) * radius,
+        EYE_LEVEL + 3,
+        Math.cos(angle) * radius
       );
+      this.perspCamera.lookAt(0, EYE_LEVEL / 2, 0);
       requestAnimationFrame(animate);
     };
+    this.camera = this.perspCamera;
     animate();
   }
 
@@ -3135,15 +2745,11 @@ export class SketchEngine {
   getSceneSummary(): string {
     const s = this.sceneData;
     const lines: string[] = [];
-    const doors = s.openings.filter((o) => o.type === "door").length;
-    const windows = s.openings.length - doors;
-    const area = s.rooms.reduce((sum, r) => sum + r.w * r.d, 0);
-    lines.push(`Floor plan: ${s.walls.length} walls, ${s.rooms.length} rooms (${area.toFixed(1)} m² total), ${doors} doors, ${windows} windows, ${s.items.filter((i) => i.kind !== "label").length} furniture items.`);
+    lines.push(`Floor plan: ${s.walls.length} walls, ${s.rooms.length} rooms, ${s.items.length} furniture items.`);
     for (const r of s.rooms) {
       lines.push(`  Room "${r.name}": ${r.w.toFixed(1)}m × ${r.d.toFixed(1)}m`);
     }
     for (const it of s.items) {
-      if (it.kind === "label") continue;
       const [w, d] = FURNITURE_SIZES[it.kind];
       lines.push(`  ${it.kind}: ${w}×${d}m at (${it.x.toFixed(1)}, ${it.z.toFixed(1)})`);
     }

@@ -109,7 +109,7 @@ export default function ContactUsPage(props: ContactUsPageProps) {
   return <div class={`nglob-contact${chatOpen() ? ' has-chat' : ''}${props.className ? ` ${props.className}` : ''}`} onKeyDown={handleKeyDown}>
     <div class={`app-shell${callbackOpen() ? ' callback-open' : ''}${belowContact() ? ' is-below-contact' : ''}`} inert={chatOpen() && mobile()}>
       <a href={`#${idPrefix}-main`} class="skip">Skip to content</a>
-      {/* <Show when={props.showDemoNotice ?? true}><div class="reference-note">Design reference · no messages or requests are sent</div></Show> */}
+      <Show when={props.showDemoNotice ?? true}><div class="reference-note">Design reference · no messages or requests are sent</div></Show>
       <div class="scroll-region" ref={element => { scrollRef = element; }} onFocusIn={keepFocusedControlVisible}>
         <SiteHeader menuOpen={menuOpen()} onMenuToggle={() => setMenuOpen(open => !open)} menuId={`${idPrefix}-menu`} menuRef={element => { menuRef = element; }} />
         <main class="page contact-page" id={`${idPrefix}-main`}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { fal, FAL_MODELS } from "../../lib/fal";
 import { ProgressBar } from "./ProgressBar";
 import { ResultViewer } from "./ResultViewer";
@@ -126,8 +126,6 @@ function extractResultUrl(kind: GenerationKind, output: Record<string, unknown>)
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 export function GenerationCard({ kind }: { kind: GenerationKind }) {
   const config = cardConfig[kind];
   const [files, setFiles] = useState<File[]>([]);
@@ -136,11 +134,7 @@ export function GenerationCard({ kind }: { kind: GenerationKind }) {
   const [progress, setProgress] = useState(0);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
-  // Each run gets its own token; cancelling or unmounting flips it so a stale
-  // poll loop can never write into the card again.
-  const runRef = useRef<{ cancelled: boolean } | null>(null);
-
-  useEffect(() => () => { if (runRef.current) runRef.current.cancelled = true; }, []);
+  const abortRef = useRef<(() => void) | null>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -157,72 +151,67 @@ export function GenerationCard({ kind }: { kind: GenerationKind }) {
       return;
     }
 
-    const run = { cancelled: false };
-    if (runRef.current) runRef.current.cancelled = true;
-    runRef.current = run;
     setStatus("uploading");
 
     try {
       // 1 – Upload files to fal storage
       const urls = await Promise.all(files.map(uploadFile));
-      if (run.cancelled) return;
-      setStatus("pending");
+      setStatus("processing");
       setProgress(10);
 
-      // 2 – Queue the job, then poll until it finishes
+      // 2 – Run model via fal.subscribe (handles queue + polling automatically)
       const modelId = FAL_MODELS[kind];
       const input = buildInput(kind, urls[0], urls, prompt);
-      const { request_id } = await fal.queue.submit(modelId, { input });
 
-      let pct = 10;
-      const startedAt = Date.now();
-      const TIMEOUT_MS = 10 * 60 * 1000;
-      while (!run.cancelled) {
-        await sleep(2000);
-        if (run.cancelled) return;
-        const statusRes = await fal.queue.status(modelId, { requestId: request_id, logs: false });
-        if (run.cancelled) return;
+      let lastPct = 10;
+      const { request_id } = await fal.queue.submit(modelId, {
+        input,
+        webhookUrl: undefined,
+      });
 
-        if (statusRes.status === "COMPLETED") {
-          const result = await fal.queue.result(modelId, { requestId: request_id });
-          if (run.cancelled) return;
-          const url = extractResultUrl(kind, result.data as Record<string, unknown>);
-          if (!url) throw new Error("The model finished but didn't return an output file. Please try again.");
-          setResultUrl(url);
-          setStatus("done");
-          setProgress(100);
-          return;
+      // Poll manually so we can track progress
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fal.queue.status(modelId, {
+            requestId: request_id,
+            logs: false,
+          });
+
+          if (statusRes.status === "IN_PROGRESS" || statusRes.status === "IN_QUEUE") {
+            // Simulate smooth progress
+            lastPct = Math.min(lastPct + (statusRes.status === "IN_PROGRESS" ? 8 : 2), 88);
+            setProgress(lastPct);
+          }
+
+          if (statusRes.status === "COMPLETED") {
+            clearInterval(pollInterval);
+            const result = await fal.queue.result(modelId, { requestId: request_id });
+            const url = extractResultUrl(kind, result.data as Record<string, unknown>);
+            if (url) {
+              setResultUrl(url);
+              setStatus("done");
+              setProgress(100);
+            } else {
+              throw new Error("The model returned a result but we couldn't find the output URL.");
+            }
+          }
+        } catch (pollError) {
+          clearInterval(pollInterval);
+          throw pollError;
         }
+      }, 2000);
 
-        if (statusRes.status === "IN_PROGRESS") {
-          setStatus("processing");
-          pct = Math.min(pct + 8, 88);
-        } else {
-          // Still waiting in the queue — creep forward slowly
-          pct = Math.min(pct + 2, 40);
-        }
-        setProgress(pct);
+      // Store cancel fn
+      abortRef.current = () => clearInterval(pollInterval);
 
-        if (Date.now() - startedAt > TIMEOUT_MS) {
-          throw new Error("This is taking longer than expected. Please try again in a few minutes.");
-        }
-      }
     } catch (err) {
-      if (run.cancelled) return;
       setStatus("failed");
-      setError(err instanceof Error && err.message ? err.message : "Generation failed. Please try again.");
+      setError(err instanceof Error ? err.message : "Generation failed. Please try again.");
     }
   }
 
-  function cancel() {
-    if (runRef.current) runRef.current.cancelled = true;
-    setStatus("idle");
-    setProgress(0);
-    setError("");
-  }
-
   function reset() {
-    if (runRef.current) runRef.current.cancelled = true;
+    abortRef.current?.();
     setFiles([]);
     setPrompt("");
     setStatus("idle");
@@ -247,52 +236,33 @@ export function GenerationCard({ kind }: { kind: GenerationKind }) {
       {resultUrl ? (
         <div className="generation-result">
           <ResultViewer kind={kind} url={resultUrl} />
-          <div className="result-actions">
-            <a className="primary" href={resultUrl} download target="_blank" rel="noopener noreferrer">
-              Download {kind === "3d" ? "GLB" : kind === "floor-plan" ? "image" : "video"} ↓
-            </a>
-            <button type="button" onClick={reset}>Start over ↺</button>
-          </div>
+          <button type="button" className="generation-action" style={{ marginTop: 12 }} onClick={reset}>
+            Start over <span>↺</span>
+          </button>
         </div>
       ) : (
         <form onSubmit={submit}>
-          <UploadZone multiple={config.multiple} files={files} onChange={setFiles} disabled={busy} />
-          {kind !== "3d" && (
-            <label className="generation-prompt">
-              Design direction
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder={kind === "video" ? "Slow camera move through the living room..." : "Materials, room names, mood, or details to preserve..."}
-                maxLength={500}
-                disabled={busy}
-              />
-            </label>
-          )}
+          <UploadZone multiple={config.multiple} files={files} onChange={setFiles} />
+          <label className="generation-prompt">
+            Design direction
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={kind === "video" ? "Slow camera move through the living room..." : "Materials, room names, mood, or details to preserve..."}
+              maxLength={500}
+              disabled={busy}
+            />
+          </label>
           <ProgressBar status={status} progress={progress} />
           {error && <p className="generation-error" role="alert">{error}</p>}
           <button type="submit" className="generation-action" disabled={busy}>
             {status === "uploading"
               ? "Uploading…"
-              : status === "pending"
-              ? "Waiting in queue…"
-              : status === "processing"
+              : status === "processing" || status === "pending"
               ? "Generating…"
-              : status === "failed"
-              ? "Try again"
               : config.action}
             <span>↗</span>
           </button>
-          {busy && (
-            <button type="button" className="generation-cancel" onClick={cancel}>
-              Cancel
-            </button>
-          )}
-          {kind === "3d" && !busy && (
-            <a className="generation-altlink" href="/dashboard/sketch">
-              Have a floor plan instead? Draw it in 2D and see it in 3D →
-            </a>
-          )}
         </form>
       )}
     </article>
