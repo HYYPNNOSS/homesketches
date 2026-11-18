@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   FurnitureKind,
   ToolKind,
@@ -10,11 +10,93 @@ import {
   FloorLevel,
   GizmoMode,
 } from "./types";
+import { SkIcon } from "./icons";
+
+// ── Tool rail (left of the canvas) ───────────────────────────────────────────
+
+const TOOL_GROUPS: { kind: ToolKind; label: string; short: string; shortcut: string }[][] = [
+  [
+    { kind: "select", label: "Select", short: "Select", shortcut: "V" },
+    { kind: "box-select", label: "Box select", short: "Box", shortcut: "B" },
+  ],
+  [
+    { kind: "wall", label: "Wall", short: "Wall", shortcut: "W" },
+    { kind: "room", label: "Enclosed room", short: "Room", shortcut: "R" },
+    { kind: "door", label: "Door", short: "Door", shortcut: "D" },
+    { kind: "window", label: "Window", short: "Window", shortcut: "N" },
+  ],
+  [
+    { kind: "furniture", label: "Furniture", short: "Furnish", shortcut: "F" },
+    { kind: "label", label: "Label", short: "Label", shortcut: "L" },
+    { kind: "camera", label: "Camera", short: "Camera", shortcut: "C" },
+  ],
+  [{ kind: "eraser", label: "Erase", short: "Erase", shortcut: "E" }],
+];
+
+export function ToolRail({ activeTool, onTool }: { activeTool: ToolKind; onTool: (t: ToolKind) => void }) {
+  return (
+    <nav className="sk-rail" role="toolbar" aria-label="Drawing tools" aria-orientation="vertical">
+      {TOOL_GROUPS.map((group, i) => (
+        <div className="sk-rail-group" key={i}>
+          {group.map((t) => (
+            <button
+              key={t.kind}
+              type="button"
+              className={`sk-rail-btn${activeTool === t.kind ? " active" : ""}`}
+              title={`${t.label} (${t.shortcut})`}
+              aria-label={`${t.label}, shortcut ${t.shortcut}`}
+              aria-pressed={activeTool === t.kind}
+              onClick={() => onTool(t.kind)}
+            >
+              <SkIcon name={t.kind} size={19} />
+              <span className="sk-rail-name">{t.short}</span>
+              <kbd className="sk-rail-key">{t.shortcut}</kbd>
+            </button>
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+// ── Furniture palette (floats over the canvas while Furniture is active) ────
+
+const FURNITURE_LIST: FurnitureKind[] = [
+  "bed", "sofa", "table", "chair", "wardrobe", "kitchen",
+  "toilet", "bath", "tv", "rug", "plant", "stairs",
+];
+
+export function FurniturePalette({ active, onPick }: { active: FurnitureKind; onPick: (f: FurnitureKind) => void }) {
+  return (
+    <div className="sk-furn-palette" role="group" aria-label="Furniture">
+      <p className="sk-overlay-title">Furniture <span>click the plan to place</span></p>
+      <div className="sk-furn-grid">
+        {FURNITURE_LIST.map((kind) => {
+          const [w, d] = FURNITURE_SIZES[kind];
+          return (
+            <button
+              key={kind}
+              type="button"
+              className={`sk-furn-chip${active === kind ? " active" : ""}`}
+              aria-label={`${kind} ${w}×${d}m`}
+              aria-pressed={active === kind}
+              onClick={() => onPick(kind)}
+            >
+              <span>{kind}</span>
+              <small>{w}×{d}m</small>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Options bar (above the canvas) ───────────────────────────────────────────
 
 interface Props {
   activeTool: ToolKind;
   activeView: ViewMode;
-  activeFurniture: FurnitureKind;
   orthogonalLock: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -23,9 +105,7 @@ interface Props {
   floors?: FloorLevel[];
   activeFloorId?: string;
   gizmoMode?: GizmoMode;
-  onTool: (t: ToolKind) => void;
   onView: (v: ViewMode) => void;
-  onFurniture: (f: FurnitureKind) => void;
   onOrthogonalLock: (v: boolean) => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -36,44 +116,98 @@ interface Props {
   onAddFloor?: () => void;
   onDeleteFloor?: (floorId: string) => void;
   onGizmoModeChange?: (mode: GizmoMode) => void;
+  children?: React.ReactNode;
 }
 
-const TOOLS: { kind: ToolKind; label: string; icon: string; shortcut: string }[] = [
-  { kind: "box-select", label: "Box select", icon: "▧", shortcut: "B" },
-  { kind: "select", label: "Select", icon: "↖", shortcut: "V" },
-  { kind: "wall", label: "Wall", icon: "┐", shortcut: "W" },
-  { kind: "room", label: "Enclosed room", icon: "□", shortcut: "R" },
-  { kind: "door", label: "Door", icon: "⌐", shortcut: "D" },
-  { kind: "window", label: "Window", icon: "⊡", shortcut: "N" },
-  { kind: "furniture", label: "Furniture", icon: "⊞", shortcut: "F" },
-  { kind: "label", label: "Label", icon: "T", shortcut: "L" },
-  { kind: "eraser", label: "Erase", icon: "⌫", shortcut: "E" },
-  { kind: "camera", label: "Camera", icon: "📷", shortcut: "C" },
-];
-
-const FURNITURE_LIST: FurnitureKind[] = [
-  "bed", "sofa", "table", "kitchen", "toilet", "bath", "stairs",
-  "plant", "tv", "rug", "chair", "wardrobe"
-];
-
-const VIEWS: { mode: ViewMode; label: string; icon: string }[] = [
-  { mode: "top", label: "Top-down", icon: "⊙" },
-  { mode: "perspective", label: "Perspective", icon: "⧫" },
-  { mode: "eye-level", label: "Eye level", icon: "◎" },
+const VIEWS: { mode: ViewMode; label: string; short: string }[] = [
+  { mode: "top", label: "Top-down", short: "Plan" },
+  { mode: "perspective", label: "Perspective", short: "3D" },
+  { mode: "eye-level", label: "Eye level", short: "Walk" },
 ];
 
 const CANVAS_PRESETS: { label: string; width: number; depth: number }[] = [
-  { label: "Studio (8×6m)", width: 8, depth: 6 },
-  { label: "1-Bed Flat (10×8m)", width: 10, depth: 8 },
-  { label: "2-Bed Flat (14×10m)", width: 14, depth: 10 },
-  { label: "Family House (20×15m)", width: 20, depth: 15 },
-  { label: "Large Estate (30×20m)", width: 30, depth: 20 },
+  { label: "Studio · 8 × 6 m", width: 8, depth: 6 },
+  { label: "1-bed flat · 10 × 8 m", width: 10, depth: 8 },
+  { label: "2-bed flat · 14 × 10 m", width: 14, depth: 10 },
+  { label: "Family house · 20 × 15 m", width: 20, depth: 15 },
+  { label: "Large estate · 30 × 20 m", width: 30, depth: 20 },
 ];
+
+const GIZMOS: { mode: GizmoMode; label: string; icon: string }[] = [
+  { mode: "translate", label: "Move", icon: "move" },
+  { mode: "rotate", label: "Rotate", icon: "rotate" },
+  { mode: "scale", label: "Scale", icon: "scale" },
+];
+
+function CanvasSizePopover({ bounds, onChange }: { bounds?: CanvasBounds; onChange?: (b: CanvasBounds) => void }) {
+  const [open, setOpen] = useState(false);
+  const width = bounds?.widthM ?? 16, depth = bounds?.depthM ?? 12;
+  const [draftW, setDraftW] = useState(String(width));
+  const [draftD, setDraftD] = useState(String(depth));
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { setDraftW(String(width)); setDraftD(String(depth)); }, [width, depth]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const apply = (w: number, d: number) => {
+    if (!onChange) return;
+    const cw = Math.max(2, Math.min(100, Number.isFinite(w) ? w : width));
+    const cd = Math.max(2, Math.min(100, Number.isFinite(d) ? d : depth));
+    if (cw === width && cd === depth) { setDraftW(String(width)); setDraftD(String(depth)); return; }
+    onChange({ widthM: cw, depthM: cd, gridStep: bounds?.gridStep ?? 0.1 });
+  };
+  return (
+    <div className="sk-popover-anchor" ref={ref}>
+      <button
+        type="button"
+        className={`sk-opt-btn${open ? " active" : ""}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={`Canvas size ${width} × ${depth} m`}
+        title="Canvas size"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <SkIcon name="ruler" size={16} />
+        <span>{width} × {depth} m</span>
+      </button>
+      {open && (
+        <div className="sk-popover" role="dialog" aria-label="Canvas size">
+          <p className="sk-overlay-title">Canvas size</p>
+          <div className="sk-preset-list">
+            {CANVAS_PRESETS.map((p) => (
+              <button
+                type="button"
+                key={p.label}
+                className={p.width === width && p.depth === depth ? "active" : ""}
+                onClick={() => apply(p.width, p.depth)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <form
+            className="sk-popover-fields"
+            onSubmit={(e) => { e.preventDefault(); apply(parseFloat(draftW), parseFloat(draftD)); }}
+          >
+            <label>Width<span><input aria-label="Canvas width in metres" type="number" min={2} max={100} step={1} value={draftW} onChange={(e) => setDraftW(e.target.value)} onBlur={() => apply(parseFloat(draftW), parseFloat(draftD))} />m</span></label>
+            <label>Depth<span><input aria-label="Canvas depth in metres" type="number" min={2} max={100} step={1} value={draftD} onChange={(e) => setDraftD(e.target.value)} onBlur={() => apply(parseFloat(draftW), parseFloat(draftD))} />m</span></label>
+            <button type="submit" hidden>Apply</button>
+          </form>
+          <small>2–100 m. The canvas cannot shrink below existing geometry.</small>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SketchToolbar({
   activeTool,
   activeView,
-  activeFurniture,
   orthogonalLock,
   canUndo,
   canRedo,
@@ -82,9 +216,7 @@ export function SketchToolbar({
   floors = [],
   activeFloorId,
   gizmoMode = "translate",
-  onTool,
   onView,
-  onFurniture,
   onOrthogonalLock,
   onUndo,
   onRedo,
@@ -95,391 +227,149 @@ export function SketchToolbar({
   onAddFloor,
   onDeleteFloor,
   onGizmoModeChange,
+  children,
 }: Props) {
-  const [showCanvasSettings, setShowCanvasSettings] = useState(false);
-
-  const curWidth = canvasBounds?.widthM ?? 16;
-  const curDepth = canvasBounds?.depthM ?? 12;
-
-  const handlePresetSelect = (presetIndex: number) => {
-    const p = CANVAS_PRESETS[presetIndex];
-    if (p && onCanvasBoundsChange) {
-      onCanvasBoundsChange({
-        widthM: p.width,
-        depthM: p.depth,
-        gridStep: canvasBounds?.gridStep ?? 0.1,
-      });
-    }
-  };
-
-  const handleCustomDimension = (w: number, d: number) => {
-    if (onCanvasBoundsChange) {
-      onCanvasBoundsChange({
-        widthM: Math.max(2, Math.min(100, w)),
-        depthM: Math.max(2, Math.min(100, d)),
-        gridStep: canvasBounds?.gridStep ?? 0.1,
-      });
-    }
-  };
+  const [length, setLength] = useState("");
+  useEffect(() => { if (activeTool !== "wall") { setLength(""); onLengthInput(null); } }, [activeTool, onLengthInput]);
 
   return (
-    <div className="sk-toolbar" role="toolbar" aria-label="Drawing tools">
-      {/* ── Multi-floor level tabs (Feature E) ── */}
+    <div className="sk-optbar" role="toolbar" aria-label="Plan options">
+      {/* Floors */}
       {floors.length > 0 && onSelectFloor && (
-        <div className="sk-toolbar-section">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "3px" }}>
-            <span className="sk-toolbar-label" style={{ margin: 0 }}>Floors</span>
-            {onAddFloor && (
-              <button
-                type="button"
-                className="sk-tool-btn"
-                style={{ padding: "1px 6px", fontSize: "10px", minWidth: "auto", height: "auto" }}
-                onClick={onAddFloor}
-                title="Add new floor level"
-                aria-label="Add new floor level"
-              >
-                + Add
-              </button>
-            )}
-          </div>
-          <div className="sk-toolbar-group" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+        <div className="sk-opt-group" role="group" aria-label="Floors">
+          <SkIcon name="layers" size={16} />
+          <div className="sk-floor-tabs">
             {floors.map((fl) => {
               const isActive = fl.id === activeFloorId;
               return (
-                <div
-                  key={fl.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    position: "relative",
-                  }}
-                >
-                  <button
-                    type="button"
-                    className={`sk-tool-btn ${isActive ? "active" : ""}`}
-                    style={{
-                      flexDirection: "row",
-                      gap: "5px",
-                      padding: "5px 8px",
-                      fontSize: "11px",
-                      minWidth: "auto",
-                    }}
-                    onClick={() => onSelectFloor(fl.id)}
-                    aria-pressed={isActive}
-                  >
-                    <span style={{ fontWeight: isActive ? 700 : 500 }}>{fl.name}</span>
-                    <span style={{ fontSize: "9px", opacity: 0.65 }}>+{fl.elevationM.toFixed(1)}m</span>
+                <div key={fl.id} className={`sk-floor-tab${isActive ? " active" : ""}`}>
+                  <button type="button" onClick={() => onSelectFloor(fl.id)} aria-pressed={isActive}>
+                    {fl.name}
+                    <small>+{fl.elevationM.toFixed(1)}m</small>
                   </button>
                   {floors.length > 1 && onDeleteFloor && (
                     <button
                       type="button"
-                      style={{
-                        position: "absolute",
-                        top: "-3px",
-                        right: "-3px",
-                        background: "rgba(30,33,24,0.9)",
-                        border: "1px solid rgba(255,255,255,0.18)",
-                        borderRadius: "50%",
-                        color: "#9ba090",
-                        cursor: "pointer",
-                        width: "14px",
-                        height: "14px",
-                        fontSize: "8.5px",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        lineHeight: 1,
-                        padding: 0,
-                      }}
+                      className="sk-floor-del"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (window.confirm(`Delete floor "${fl.name}"?`)) onDeleteFloor(fl.id);
+                        if (window.confirm(`Delete floor "${fl.name}"? You can undo this.`)) onDeleteFloor(fl.id);
                       }}
                       title={`Delete floor ${fl.name}`}
                       aria-label={`Delete floor ${fl.name}`}
                     >
-                      ✕
+                      <SkIcon name="close" size={11} />
                     </button>
                   )}
                 </div>
               );
             })}
           </div>
+          {onAddFloor && (
+            <button type="button" className="sk-opt-icon" onClick={onAddFloor} title="Add floor level" aria-label="Add new floor level">
+              <SkIcon name="plus" size={15} />
+            </button>
+          )}
         </div>
       )}
 
-      {floors.length > 0 && <div className="sk-toolbar-divider" aria-hidden="true" />}
-
-      {/* ── View modes ── */}
-      <div className="sk-toolbar-section">
-        <span className="sk-toolbar-label">View</span>
-        <div className="sk-toolbar-group">
-          {VIEWS.map((v) => (
-            <button
-              key={v.mode}
-              type="button"
-              className={`sk-tool-btn ${activeView === v.mode ? "active" : ""}`}
-              title={v.label}
-              aria-label={v.label}
-              aria-pressed={activeView === v.mode}
-              onClick={() => onView(v.mode)}
-            >
-              <span className="sk-tool-icon">{v.icon}</span>
-              <span className="sk-tool-name">{v.label}</span>
-            </button>
-          ))}
-        </div>
+      {/* Views */}
+      <div className="sk-segmented" role="group" aria-label="View">
+        {VIEWS.map((v) => (
+          <button
+            key={v.mode}
+            type="button"
+            className={activeView === v.mode ? "active" : ""}
+            title={v.label}
+            aria-label={v.label}
+            aria-pressed={activeView === v.mode}
+            onClick={() => onView(v.mode)}
+          >
+            <SkIcon name={v.mode} size={15} />
+            <span>{v.short}</span>
+          </button>
+        ))}
       </div>
 
-      {/* ── 3D Gizmo Controls (Feature B2) ── */}
+      {/* Contextual options */}
       {activeView !== "top" && onGizmoModeChange && (
-        <>
-          <div className="sk-toolbar-divider" aria-hidden="true" />
-          <div className="sk-toolbar-section">
-            <span className="sk-toolbar-label">3D Gizmo</span>
-            <div className="sk-toolbar-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "2px" }}>
-              <button
-                type="button"
-                className={`sk-tool-btn ${gizmoMode === "translate" ? "active" : ""}`}
-                style={{ padding: "4px 2px", fontSize: "11px", justifyContent: "center" }}
-                onClick={() => onGizmoModeChange("translate")}
-                title="Translate (Move object)"
-                aria-label="Translate gizmo"
-              >
-                Move
-              </button>
-              <button
-                type="button"
-                className={`sk-tool-btn ${gizmoMode === "rotate" ? "active" : ""}`}
-                style={{ padding: "4px 2px", fontSize: "11px", justifyContent: "center" }}
-                onClick={() => onGizmoModeChange("rotate")}
-                title="Rotate object"
-                aria-label="Rotate gizmo"
-              >
-                Rotate
-              </button>
-              <button
-                type="button"
-                className={`sk-tool-btn ${gizmoMode === "scale" ? "active" : ""}`}
-                style={{ padding: "4px 2px", fontSize: "11px", justifyContent: "center" }}
-                onClick={() => onGizmoModeChange("scale")}
-                title="Scale object"
-                aria-label="Scale gizmo"
-              >
-                Scale
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-
-      <div className="sk-toolbar-divider" aria-hidden="true" />
-
-      {/* ── Drawing tools ── */}
-      <div className="sk-toolbar-section">
-        <span className="sk-toolbar-label">Draw</span>
-        <div className="sk-toolbar-group">
-          {TOOLS.map((t) => (
+        <div className="sk-segmented" role="group" aria-label="3D gizmo">
+          {GIZMOS.map((g) => (
             <button
-              key={t.kind}
+              key={g.mode}
               type="button"
-              className={`sk-tool-btn ${activeTool === t.kind ? "active" : ""}`}
-              title={`${t.label} (${t.shortcut})`}
-              aria-label={`${t.label}, shortcut ${t.shortcut}`}
-              aria-pressed={activeTool === t.kind}
-              onClick={() => onTool(t.kind)}
+              className={gizmoMode === g.mode ? "active" : ""}
+              onClick={() => onGizmoModeChange(g.mode)}
+              title={`${g.label} selected object`}
+              aria-label={`${g.label === "Move" ? "Translate" : g.label} gizmo`}
+              aria-pressed={gizmoMode === g.mode}
             >
-              <span className="sk-tool-icon">{t.icon}</span>
-              <span className="sk-tool-name">{t.label}</span>
-              <kbd className="sk-shortcut">{t.shortcut}</kbd>
+              <SkIcon name={g.icon} size={15} />
+              <span>{g.label}</span>
             </button>
           ))}
         </div>
-      </div>
-
-      {/* ── Furniture sub-picker ── */}
-      {activeTool === "furniture" && (
-        <>
-          <div className="sk-toolbar-divider" aria-hidden="true" />
-          <div className="sk-toolbar-section">
-            <span className="sk-toolbar-label">Furniture</span>
-            <div className="sk-toolbar-group sk-furniture-group">
-              {FURNITURE_LIST.map((kind) => {
-                const [w, d] = FURNITURE_SIZES[kind];
-                return (
-                  <button
-                    key={kind}
-                    type="button"
-                    className={`sk-tool-btn sk-furn-btn ${activeFurniture === kind ? "active" : ""}`}
-                    aria-label={`${kind} ${w}×${d}m`}
-                    aria-pressed={activeFurniture === kind}
-                    onClick={() => onFurniture(kind)}
-                  >
-                    <span className="sk-tool-name">{kind}</span>
-                    <span className="sk-furn-size">{w}×{d}m</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </>
       )}
 
-      {/* ── Wall options ── */}
-      {activeTool === "wall" && (
-        <>
-          <div className="sk-toolbar-divider" aria-hidden="true" />
-          <div className="sk-toolbar-section">
-            <span className="sk-toolbar-label">Wall options</span>
-            <label className="sk-ortho-label">
-              <input
-                type="checkbox"
-                checked={orthogonalLock}
-                onChange={(e) => onOrthogonalLock(e.target.checked)}
-                aria-label="Orthogonal lock — hold Shift for temporary"
-              />
-              <span>Orthogonal lock</span>
-              <kbd className="sk-shortcut">⇧</kbd>
-            </label>
-            <label className="sk-len-label">
-              Length (m)
-              <input
-                type="number"
-                className="sk-len-input"
-                placeholder="auto"
-                min="0.1"
-                step="0.1"
-                aria-label="Typed wall length in metres"
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  onLengthInput(isNaN(v) || v <= 0 ? null : v);
-                }}
-              />
-            </label>
-          </div>
-        </>
-      )}
-
-      {/* ── Canvas Bounds settings (Feature A.6) ── */}
-      <div className="sk-toolbar-divider" aria-hidden="true" />
-      <div className="sk-toolbar-section">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span className="sk-toolbar-label" style={{ margin: 0 }}>Canvas bounds</span>
-          <button
-            type="button"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#a3b18a",
-              cursor: "pointer",
-              fontSize: "11px",
-              padding: "2px 4px",
-            }}
-            onClick={() => setShowCanvasSettings((v) => !v)}
-            aria-expanded={showCanvasSettings}
-          >
-            {showCanvasSettings ? "Hide" : `${curWidth}×${curDepth}m`}
-          </button>
-        </div>
-
-        {showCanvasSettings && (
-          <div style={{ marginTop: "6px", display: "flex", flexDirection: "column", gap: "6px" }}>
-            <select
-              className="sk-select"
-              style={{ fontSize: "12px", padding: "4px" }}
+      {activeTool === "wall" && activeView === "top" && (
+        <div className="sk-opt-group sk-wall-opts" role="group" aria-label="Wall options">
+          <label className="sk-switch">
+            <input
+              type="checkbox"
+              checked={orthogonalLock}
+              onChange={(e) => onOrthogonalLock(e.target.checked)}
+              aria-label="Orthogonal lock — hold Shift for temporary"
+            />
+            <span aria-hidden="true" />
+            Straight walls
+          </label>
+          <label className="sk-inline-field" title="Type a length, then click to place a wall of exactly that length">
+            Length
+            <input
+              type="number"
+              placeholder="free"
+              min="0.1"
+              step="0.1"
+              value={length}
+              aria-label="Typed wall length in metres"
               onChange={(e) => {
-                const idx = parseInt(e.target.value, 10);
-                if (!isNaN(idx)) handlePresetSelect(idx);
+                setLength(e.target.value);
+                const v = parseFloat(e.target.value);
+                onLengthInput(isNaN(v) || v <= 0 ? null : v);
               }}
-              defaultValue=""
-              aria-label="Canvas size preset"
-            >
-              <option value="" disabled>Choose preset...</option>
-              {CANVAS_PRESETS.map((p, i) => (
-                <option key={p.label} value={i}>{p.label}</option>
-              ))}
-            </select>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
-              <label style={{ fontSize: "11px", color: "#a0a595" }}>
-                Width (m)
-                <input
-                  type="number"
-                  className="sk-len-input"
-                  style={{ width: "100%", marginTop: "2px" }}
-                  value={curWidth}
-                  min={2}
-                  max={100}
-                  step={1}
-                  onChange={(e) => handleCustomDimension(parseFloat(e.target.value) || curWidth, curDepth)}
-                />
-              </label>
-              <label style={{ fontSize: "11px", color: "#a0a595" }}>
-                Depth (m)
-                <input
-                  type="number"
-                  className="sk-len-input"
-                  style={{ width: "100%", marginTop: "2px" }}
-                  value={curDepth}
-                  min={2}
-                  max={100}
-                  step={1}
-                  onChange={(e) => handleCustomDimension(curWidth, parseFloat(e.target.value) || curDepth)}
-                />
-              </label>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="sk-toolbar-divider" aria-hidden="true" />
-
-      {/* ── History ── */}
-      <div className="sk-toolbar-section">
-        <span className="sk-toolbar-label">History</span>
-        <div className="sk-toolbar-group">
-          <button
-            type="button"
-            className="sk-tool-btn"
-            disabled={!canUndo}
-            aria-label="Undo (Ctrl+Z)"
-            title="Undo (Ctrl+Z)"
-            onClick={onUndo}
-          >
-            <span className="sk-tool-icon">↩</span>
-            <span className="sk-tool-name">Undo</span>
-          </button>
-          <button
-            type="button"
-            className="sk-tool-btn"
-            disabled={!canRedo}
-            aria-label="Redo (Ctrl+Shift+Z)"
-            title="Redo (Ctrl+Shift+Z)"
-            onClick={onRedo}
-          >
-            <span className="sk-tool-icon">↪</span>
-            <span className="sk-tool-name">Redo</span>
-          </button>
-          <button
-            type="button"
-            className="sk-tool-btn sk-tool-danger"
-            aria-label="Clear all — reset scene"
-            title="Clear all"
-            onClick={() => {
-              if (window.confirm("Clear the entire scene?")) onClear();
-            }}
-          >
-            <span className="sk-tool-icon">✕</span>
-            <span className="sk-tool-name">Clear</span>
-          </button>
+            />
+            m
+          </label>
         </div>
-      </div>
+      )}
+
+      {children}
+
+      <span className="sk-opt-spacer" />
 
       {isRecording && (
-        <div className="sk-recording-badge" aria-live="polite">
-          <span className="sk-rec-dot" /> REC
-        </div>
+        <span className="sk-recording-badge" aria-live="polite"><span className="sk-rec-dot" /> REC</span>
       )}
+
+      <CanvasSizePopover bounds={canvasBounds} onChange={onCanvasBoundsChange} />
+
+      <div className="sk-opt-group" role="group" aria-label="History">
+        <button type="button" className="sk-opt-icon" disabled={!canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" onClick={onUndo}>
+          <SkIcon name="undo" size={17} />
+        </button>
+        <button type="button" className="sk-opt-icon" disabled={!canRedo} aria-label="Redo (Ctrl+Shift+Z)" title="Redo (Ctrl+Shift+Z)" onClick={onRedo}>
+          <SkIcon name="redo" size={17} />
+        </button>
+        <button
+          type="button"
+          className="sk-opt-icon sk-danger"
+          aria-label="Clear all — reset scene"
+          title="Clear this floor (can be undone)"
+          onClick={() => { if (window.confirm("Clear everything on this floor? You can undo this.")) onClear(); }}
+        >
+          <SkIcon name="trash" size={17} />
+        </button>
+      </div>
     </div>
   );
 }

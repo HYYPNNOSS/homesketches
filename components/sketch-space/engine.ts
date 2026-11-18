@@ -869,6 +869,28 @@ export class SketchEngine {
 
   resetView() { this.setView("top"); this.fitToPlan(); }
 
+  /** Zoom the 2D plan by `factor`, keeping the point under (clientX, clientY) fixed
+   *  (defaults to the canvas centre). */
+  zoomBy(factor: number, clientX?: number, clientY?: number) {
+    if (this.activeView !== "top") return;
+    cancelAnimationFrame(this.tweenFrame);
+    const cam = this.orthoCamera;
+    const before = cam.zoom;
+    const after = Math.max(0.05, Math.min(20, before * factor));
+    if (after === before) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const nx = clientX === undefined ? 0 : ((clientX - rect.left) / (rect.width || 1)) * 2 - 1;
+    const ny = clientY === undefined ? 0 : ((clientY - rect.top) / (rect.height || 1)) * 2 - 1;
+    const halfW = (cam.right - cam.left) / 2, halfH = (cam.top - cam.bottom) / 2;
+    const dx = nx * halfW * (1 / before - 1 / after);
+    const dz = ny * halfH * (1 / before - 1 / after);
+    cam.zoom = after;
+    cam.position.x += dx; cam.position.z += dz;
+    if (this.controls) { this.controls.target.x += dx; this.controls.target.z += dz; }
+    cam.updateProjectionMatrix();
+    this.onResize();
+  }
+
   // ─── Input binding ───────────────────────────────────────────────────────────
 
   private bindEvents() {
@@ -977,11 +999,9 @@ export class SketchEngine {
     if (this.activeView !== "top") return;
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      // Zoom - limit minimum zoom to prevent zooming out too much
-      const delta = e.deltaY < 0 ? 1.15 : 0.87;
-      this.orthoCamera.zoom = Math.max(0.5, Math.min(20, this.orthoCamera.zoom * delta));
-      this.orthoCamera.updateProjectionMatrix();
-      this.onResize();
+      // Zoom towards the cursor (trackpad pinch arrives as ctrl+wheel).
+      const factor = Math.exp(-Math.max(-60, Math.min(60, e.deltaY)) * 0.006);
+      this.zoomBy(factor, e.clientX, e.clientY);
     } else {
       // Pan
       const speed = 0.05 / this.orthoCamera.zoom;
@@ -995,8 +1015,11 @@ export class SketchEngine {
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (e.target instanceof HTMLElement && (e.target.closest("input, textarea, select, [contenteditable=true]"))) return;
-    
+    if (e.target instanceof HTMLElement && (e.target.closest("input, textarea, select, [contenteditable=true], [role=dialog]"))) return;
+    // Let focused buttons/links keep their native Space/Enter activation.
+    if (e.code === "Space" && e.target instanceof HTMLElement && e.target.closest("button, a, summary")) return;
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+
     const command = e.ctrlKey || e.metaKey;
     if (command && ["a","c","v","d"].includes(e.key.toLowerCase()) && this.canvas === document.activeElement) {
       e.preventDefault();
@@ -1021,10 +1044,15 @@ export class SketchEngine {
       }
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+    if ((e.ctrlKey || e.metaKey) && key === "z") {
       e.preventDefault();
       if (e.shiftKey) this.redo(); else this.undo();
+      return;
     }
+    if ((e.ctrlKey || e.metaKey) && key === "y") {
+      e.preventDefault(); this.redo(); return;
+    }
+    if (e.altKey) return;
     if (e.key === "Escape") {
       this.cancelTool(); this.setSelection([]);
     }
@@ -1038,12 +1066,12 @@ export class SketchEngine {
       b: "box-select", w: "wall", r: "room", d: "door", n: "window", f: "furniture",
       l: "label", e: "eraser", v: "select", c: "camera",
     };
-    if (!e.ctrlKey && !e.metaKey && shortcuts[e.key] && !(e.key === "r" && this.activeTool === "select")) {
-      this.setTool(shortcuts[e.key]);
+    if (!e.ctrlKey && !e.metaKey && shortcuts[key] && !(key === "r" && this.activeTool === "select")) {
+      this.setTool(shortcuts[key]);
     }
-    
+
     // Rotate furniture — only when select tool is active to avoid conflict with "R" → room shortcut (B-7)
-    if ((e.key === "r" || e.key === "R") && this.activeTool === "select") {
+    if (!e.ctrlKey && !e.metaKey && key === "r" && this.activeTool === "select") {
       this.rotateSelected();
     }
   };

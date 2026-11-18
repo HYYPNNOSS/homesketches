@@ -324,39 +324,18 @@ export function RenderPanel({
   return (
     <aside className="sk-panel" aria-label="Render and design panel">
       {/* ── Subpanel Tab Navigation ── */}
-      <div style={{ display: "flex", gap: "2px", borderBottom: "1px solid rgba(255,255,255,0.08)", paddingBottom: "6px", marginBottom: "12px" }}>
-        <button
-          type="button"
-          className={`sk-tool-btn ${activeTab === "render" ? "active" : ""}`}
-          style={{ flex: 1, padding: "6px 2px", fontSize: "11px", justifyContent: "center" }}
-          onClick={() => setActiveTab("render")}
-        >
-          Render
-        </button>
-        <button
-          type="button"
-          className={`sk-tool-btn ${activeTab === "ai-gen" ? "active" : ""}`}
-          style={{ flex: 1, padding: "6px 2px", fontSize: "11px", justifyContent: "center" }}
-          onClick={() => setActiveTab("ai-gen")}
-        >
-          AI Plan
-        </button>
-        <button
-          type="button"
-          className={`sk-tool-btn ${activeTab === "materials" ? "active" : ""}`}
-          style={{ flex: 1, padding: "6px 2px", fontSize: "11px", justifyContent: "center" }}
-          onClick={() => setActiveTab("materials")}
-        >
-          Materials
-        </button>
-        <button
-          type="button"
-          className={`sk-tool-btn ${activeTab === "cameras" ? "active" : ""}`}
-          style={{ flex: 1, padding: "6px 2px", fontSize: "11px", justifyContent: "center" }}
-          onClick={() => setActiveTab("cameras")}
-        >
-          Cameras
-        </button>
+      <div className="sk-tabs" role="group" aria-label="Panel sections">
+        {([["render", "Render"], ["ai-gen", "AI Plan"], ["materials", "Materials"], ["cameras", "Cameras"]] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={activeTab === id ? "active" : ""}
+            aria-pressed={activeTab === id}
+            onClick={() => setActiveTab(id)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* ── TAB 1: RENDER ── */}

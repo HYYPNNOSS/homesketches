@@ -73,17 +73,22 @@ export function ProjectBar({ engine, onExport }: { engine: SketchEngine | null; 
       engine.setProject(project); await persist(engine.getProject()); setPicker(false);
     });
   }
+  const statusKind = status.startsWith("Saving") || status.startsWith("Loading") ? "busy" : status === "Not saved" ? "error" : "ok";
   return <div className="sk-project-bar">
-    <label className="sk-project-name">Project<input aria-label="Project name" maxLength={80} value={name} disabled={!engine || busy} onChange={e => setName(e.target.value)} onBlur={() => engine?.renameProject(name)} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
-    <span className="sk-save-status" role="status">{status}</span>
-    <div className="sk-project-actions">
-      <button disabled={!engine || busy} onClick={() => action(async () => { const project = emptyProject(); project.id = crypto.randomUUID(); engine?.setProject(project); })}>New</button>
-      <button disabled={!engine || busy} aria-expanded={picker} onClick={async () => { try { await saveCurrent(); setDesigns(await listDesigns()); setSelected(engine?.getProject().id ?? ""); setPicker(!picker); } catch { setError("Could not open saved designs. Export JSON to keep your current design."); } }}>Open</button>
-      <button disabled={!engine || busy} onClick={() => action(async () => { const copy = structuredClone(engine!.getProject()); copy.id = crypto.randomUUID(); copy.name = `${copy.name ?? "Untitled Project"} copy`.slice(0, 80); engine!.setProject(copy); await persist(engine!.getProject()); })}>Save a copy</button>
+    <label className="sk-project-name"><span className="sk-visually-hidden">Project</span><input aria-label="Project name" maxLength={80} value={name} disabled={!engine || busy} onChange={e => setName(e.target.value)} onBlur={() => engine?.renameProject(name)} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setName(engine?.getProject().name ?? name); e.currentTarget.blur(); } }} /></label>
+    <span className={`sk-save-status ${statusKind}`} role="status"><i aria-hidden="true" />{status}</span>
+    <div className="sk-project-actions" role="group" aria-label="Project file">
+      <button type="button" disabled={!engine || busy} title="Start a blank design. The current one stays saved under Open." onClick={() => action(async () => { const project = emptyProject(); project.id = crypto.randomUUID(); engine?.setProject(project); })}>New</button>
+      <button type="button" disabled={!engine || busy} aria-expanded={picker} onClick={async () => { if (picker) { setPicker(false); return; } try { await saveCurrent(); setDesigns(await listDesigns()); setSelected(engine?.getProject().id ?? ""); setPicker(true); } catch { setError("Could not open saved designs. Export JSON to keep your current design."); } }}>Open</button>
+      <button type="button" disabled={!engine || busy} onClick={() => action(async () => { const copy = structuredClone(engine!.getProject()); copy.id = crypto.randomUUID(); copy.name = `${copy.name ?? "Untitled Project"} copy`.slice(0, 80); engine!.setProject(copy); await persist(engine!.getProject()); })}>Save a copy</button>
+      <span className="sk-bar-sep" aria-hidden="true" />
       <label className="sk-import-button">Import JSON<input type="file" accept=".json,application/json" disabled={!engine || busy} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ""; }} /></label>
-      <button disabled={!engine} onClick={onExport}>Export JSON</button>
+      <button type="button" disabled={!engine} onClick={onExport}>Export JSON</button>
     </div>
-    {picker && <div className="sk-project-picker"><label>Saved designs<select aria-label="Saved designs" value={selected} onChange={e => setSelected(e.target.value)}>{designs.map(design => <option value={design.id} key={design.id}>{design.name} · {new Date(design.updatedAt).toLocaleDateString()}</option>)}</select></label><button disabled={!selected || busy} onClick={() => action(async () => { const design = designs.find(d => d.id === selected); if (design) { engine?.setProject(design.project); setPicker(false); } })}>Open design</button><button onClick={() => setPicker(false)}>Close</button></div>}
+    {picker && <div className="sk-project-picker" role="dialog" aria-label="Open a saved design">
+      {designs.length === 0 ? <p>No saved designs in this browser yet.</p> : <label>Saved designs<select aria-label="Saved designs" value={selected} onChange={e => setSelected(e.target.value)}>{designs.map(design => <option value={design.id} key={design.id}>{design.name} · {new Date(design.updatedAt).toLocaleDateString()}</option>)}</select></label>}
+      <div className="sk-picker-actions"><button type="button" className="sk-primary" disabled={!selected || busy} onClick={() => action(async () => { const design = designs.find(d => d.id === selected); if (design) { engine?.setProject(design.project); setPicker(false); } })}>Open design</button><button type="button" onClick={() => setPicker(false)}>Close</button></div>
+    </div>}
     {error && <p role="alert" className="sk-project-error">{error}</p>}
   </div>;
 }

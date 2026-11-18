@@ -9,7 +9,8 @@ import { TracePanel } from "../../../components/sketch-space/TracePanel";
 import type { SelectedObject } from "../../../components/sketch-space/selection";
 import { RoomProperties } from "../../../components/sketch-space/RoomProperties";
 import { ProjectBar } from "../../../components/sketch-space/ProjectBar";
-import { SketchToolbar } from "../../../components/sketch-space/SketchToolbar";
+import { SketchToolbar, ToolRail, FurniturePalette } from "../../../components/sketch-space/SketchToolbar";
+import { SkIcon } from "../../../components/sketch-space/icons";
 import { RenderPanel } from "../../../components/sketch-space/RenderPanel";
 import { StudioShell } from "../../../components/dashboard/StudioShell";
 import type {
@@ -23,7 +24,7 @@ import type {
   VirtualCamera,
 } from "../../../components/sketch-space/types";
 
-// ── Contextual floating toolbar (Features H1, C.6, B1) ───────────────────────
+// ── Selection inspector (shown in the design panel) ─────────────────────────
 
 interface ContextMenu {
   screenX: number;
@@ -31,6 +32,54 @@ interface ContextMenu {
   type: "item" | "wall" | "opening" | "camera" | "room";
   id: string;
 }
+
+/** Numeric field that edits a draft and commits a clamped value on blur / Enter
+ *  (one undo step per edit instead of one per keystroke). */
+function NumberField({ label, value, min, max, step, unit = "m", onCommit }: {
+  label: string; value: number; min: number; max: number; step: number; unit?: string; onCommit: (v: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => { setDraft(String(+value.toFixed(3))); }, [value]);
+  const commit = () => {
+    const v = parseFloat(draft);
+    if (!Number.isFinite(v)) { setDraft(String(+value.toFixed(3))); return; }
+    const clamped = Math.max(min, Math.min(max, v));
+    setDraft(String(clamped));
+    if (Math.abs(clamped - value) > 1e-9) onCommit(clamped);
+  };
+  return (
+    <label className="sk-insp-field">
+      <span>{label}</span>
+      <span className="sk-insp-input">
+        <input
+          type="number"
+          inputMode="decimal"
+          min={min}
+          max={max}
+          step={step}
+          value={draft}
+          aria-label={label}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); commit(); }
+            if (e.key === "Escape") { setDraft(String(+value.toFixed(3))); e.currentTarget.blur(); }
+          }}
+        />
+        <em>{unit}</em>
+      </span>
+    </label>
+  );
+}
+
+const WALL_MATERIALS = [
+  { color: 0xf3f4f6, hex: "#f3f4f6", label: "White plaster" },
+  { color: 0xe8dcc8, hex: "#e8dcc8", label: "Warm cream" },
+  { color: 0x3d4234, hex: "#3d4234", label: "Dark slate" },
+  { color: 0x994d38, hex: "#994d38", label: "Brick red" },
+  { color: 0x8d6446, hex: "#8d6446", label: "Timber wood" },
+  { color: 0x5a7a6a, hex: "#5a7a6a", label: "Sage olive" },
+];
 
 function ContextualToolbar({
   menu,
@@ -71,137 +120,72 @@ function ContextualToolbar({
   const selectedWall = scene?.walls.find((w) => w.id === menu.id);
   const selectedOpening = scene?.openings.find((o) => o.id === menu.id);
   const selectedCamera = scene?.virtualCameras?.find((c) => c.id === menu.id);
-
-  const winW = typeof window !== "undefined" ? window.innerWidth : 1280;
-  const winH = typeof window !== "undefined" ? window.innerHeight : 800;
-  const cardW = 252;
-  const cardH = 280;
-  const left = Math.min(Math.max(12, menu.screenX - cardW / 2), winW - cardW - 16);
-  const top = Math.min(Math.max(64, menu.screenY - 30), winH - cardH - 20);
+  const cap = (v: string) => v.charAt(0).toUpperCase() + v.slice(1);
 
   const typeIcons: Record<string, string> = {
-    item: "🪑",
-    wall: "🧱",
-    opening: selectedOpening?.type === "window" ? "🪟" : "🚪",
-    camera: "📷",
+    item: "furniture",
+    wall: "wall",
+    opening: selectedOpening?.type === "window" ? "window" : "door",
+    camera: "camera",
   };
-
   const typeTitles: Record<string, string> = {
-    item: selectedItem ? `${selectedItem.kind.charAt(0).toUpperCase() + selectedItem.kind.slice(1)}` : "Furniture Item",
+    item: selectedItem ? cap(selectedItem.kind) : "Furniture Item",
     wall: "Wall Section",
-    opening: selectedOpening ? `${selectedOpening.type.charAt(0).toUpperCase() + selectedOpening.type.slice(1)}` : "Wall Opening",
+    opening: selectedOpening ? cap(selectedOpening.type) : "Wall Opening",
     camera: selectedCamera?.name ?? "Virtual Camera",
   };
-
-  const WALL_MATERIALS = [
-    { color: 0xf3f4f6, hex: "#f3f4f6", label: "White plaster" },
-    { color: 0xe8dcc8, hex: "#e8dcc8", label: "Warm cream" },
-    { color: 0x3d4234, hex: "#3d4234", label: "Dark slate" },
-    { color: 0x994d38, hex: "#994d38", label: "Brick red" },
-    { color: 0x8d6446, hex: "#8d6446", label: "Timber wood" },
-    { color: 0x5a7a6a, hex: "#5a7a6a", label: "Sage olive" },
-  ];
+  const wallLength = selectedWall ? Math.hypot(selectedWall.b[0] - selectedWall.a[0], selectedWall.b[1] - selectedWall.a[1]) : 0;
 
   return (
-    <div
-      className="sk-ctx"
-      style={{ left, top }}
-      role="region"
-      aria-label={`${typeTitles[menu.type] ?? "Element"} properties`}
-    >
-      {/* ── Header ── */}
-      <div className="sk-ctx-header">
-        <span className="sk-ctx-icon">{typeIcons[menu.type] ?? "⚙"}</span>
-        <span className="sk-ctx-title">{typeTitles[menu.type] ?? "Element"}</span>
-        <button
-          type="button"
-          className="sk-ctx-close"
-          onClick={onDismiss}
-          title="Dismiss inspector (Esc)"
-          aria-label="Dismiss inspector"
-        >
-          ✕
+    <section className="sk-ctx" role="region" aria-label={`${typeTitles[menu.type] ?? "Element"} properties`}>
+      <header className="sk-ctx-header">
+        <span className="sk-ctx-icon"><SkIcon name={typeIcons[menu.type] ?? "select"} size={16} /></span>
+        <span className="sk-ctx-title">
+          {typeTitles[menu.type] ?? "Element"}
+          {selectedWall && <small>{wallLength.toFixed(2)} m long</small>}
+          {selectedItem && <small>{(selectedItem.rot * 180 / Math.PI).toFixed(0)}° · {(selectedItem.scale ?? 1).toFixed(2)}×</small>}
+        </span>
+        <button type="button" className="sk-ctx-close" onClick={onDismiss} title="Close inspector (Esc)" aria-label="Dismiss inspector">
+          <SkIcon name="close" size={14} />
         </button>
-      </div>
+      </header>
 
-      {/* ── Body Properties ── */}
       <div className="sk-ctx-body">
-        {/* Item properties */}
-        {menu.type === "item" && selectedItem && (
-          <>
-            {onScaleChange && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Scale</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="range"
-                    min="0.2"
-                    max="3.0"
-                    step="0.05"
-                    value={selectedItem.scale ?? 1.0}
-                    onChange={(e) => onScaleChange(parseFloat(e.target.value))}
-                    className="sk-ctx-slider"
-                    aria-label="Item scale factor"
-                  />
-                  <span className="sk-ctx-val">{(selectedItem.scale ?? 1.0).toFixed(2)}×</span>
-                </div>
-              </div>
-            )}
-          </>
+        {menu.type === "item" && selectedItem && onScaleChange && (
+          <label className="sk-insp-field">
+            <span>Scale</span>
+            <span className="sk-insp-range">
+              <input
+                type="range" min="0.2" max="3.0" step="0.05"
+                value={selectedItem.scale ?? 1.0}
+                onChange={(e) => onScaleChange(parseFloat(e.target.value))}
+                aria-label="Item scale factor"
+              />
+              <output>{(selectedItem.scale ?? 1.0).toFixed(2)}×</output>
+            </span>
+          </label>
         )}
 
-        {/* Wall properties */}
         {menu.type === "wall" && selectedWall && (
           <>
-            {onWallHeight && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Height</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="1.0"
-                    max="5.0"
-                    value={selectedWall.height ?? 2.7}
-                    onChange={(e) => onWallHeight(parseFloat(e.target.value) || 2.7)}
-                    className="sk-ctx-input"
-                    aria-label="Wall height in metres"
-                  />
-                  <span className="sk-ctx-unit">m</span>
-                </div>
-              </div>
-            )}
-            {onWallThickness && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Thickness</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="number"
-                    step="0.02"
-                    min="0.05"
-                    max="0.6"
-                    value={selectedWall.thickness ?? 0.15}
-                    onChange={(e) => onWallThickness(parseFloat(e.target.value) || 0.15)}
-                    className="sk-ctx-input"
-                    aria-label="Wall thickness in metres"
-                  />
-                  <span className="sk-ctx-unit">m</span>
-                </div>
-              </div>
-            )}
+            <div className="sk-insp-grid">
+              {onWallHeight && <NumberField label="Height" value={selectedWall.height ?? 2.7} min={1} max={5} step={0.1} onCommit={onWallHeight} />}
+              {onWallThickness && <NumberField label="Thickness" value={selectedWall.thickness ?? 0.15} min={0.05} max={0.6} step={0.01} onCommit={onWallThickness} />}
+            </div>
             {onWallColor && (
-              <div className="sk-ctx-row" style={{ alignItems: "flex-start", paddingTop: "4px" }}>
-                <span className="sk-ctx-label" style={{ paddingTop: "2px" }}>Finish</span>
-                <div className="sk-ctx-swatches">
+              <div className="sk-insp-field">
+                <span>Finish</span>
+                <div className="sk-ctx-swatches" role="group" aria-label="Wall finish">
                   {WALL_MATERIALS.map((m) => (
                     <button
                       key={m.hex}
                       type="button"
-                      className={`sk-ctx-swatch ${selectedWall.color === m.color ? "active" : ""}`}
+                      className={`sk-ctx-swatch${(selectedWall.color ?? 0xf3f4f6) === m.color ? " active" : ""}`}
                       style={{ background: m.hex }}
                       onClick={() => onWallColor(m.color)}
                       title={m.label}
                       aria-label={m.label}
+                      aria-pressed={(selectedWall.color ?? 0xf3f4f6) === m.color}
                     />
                   ))}
                 </div>
@@ -210,162 +194,51 @@ function ContextualToolbar({
           </>
         )}
 
-        {/* Opening properties */}
         {menu.type === "opening" && selectedOpening && (
-          <>
-            {onOpeningWidth && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Width</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0.4"
-                    max="3.5"
-                    value={selectedOpening.w}
-                    onChange={(e) => onOpeningWidth(parseFloat(e.target.value) || 0.9)}
-                    className="sk-ctx-input"
-                    aria-label="Opening width in metres"
-                  />
-                  <span className="sk-ctx-unit">m</span>
-                </div>
-              </div>
-            )}
-            {onOpeningHeight && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Height</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0.4"
-                    max="3.5"
-                    value={selectedOpening.h ?? (selectedOpening.type === "window" ? 1.2 : 2.7)}
-                    onChange={(e) => onOpeningHeight(parseFloat(e.target.value) || 2.1)}
-                    className="sk-ctx-input"
-                    aria-label="Opening height in metres"
-                  />
-                  <span className="sk-ctx-unit">m</span>
-                </div>
-              </div>
-            )}
-            {selectedOpening.type === "window" && onOpeningSill && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Sill Height</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0.0"
-                    max="2.2"
-                    value={selectedOpening.sillHeight ?? 0.9}
-                    onChange={(e) => onOpeningSill(parseFloat(e.target.value) || 0.9)}
-                    className="sk-ctx-input"
-                    aria-label="Sill elevation in metres"
-                  />
-                  <span className="sk-ctx-unit">m</span>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Camera properties */}
-        {menu.type === "camera" && selectedCamera && (
-          <>
-            {onCameraHeight && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Elevation</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.3"
-                    max="6.0"
-                    value={selectedCamera.heightM}
-                    onChange={(e) => onCameraHeight(parseFloat(e.target.value) || 1.6)}
-                    className="sk-ctx-input"
-                    aria-label="Camera elevation in metres"
-                  />
-                  <span className="sk-ctx-unit">m</span>
-                </div>
-              </div>
-            )}
-            {onCameraFov && (
-              <div className="sk-ctx-row">
-                <span className="sk-ctx-label">Field of View</span>
-                <div className="sk-ctx-control">
-                  <input
-                    type="range"
-                    min="25"
-                    max="95"
-                    step="5"
-                    value={selectedCamera.fov}
-                    onChange={(e) => onCameraFov(parseFloat(e.target.value) || 55)}
-                    className="sk-ctx-slider"
-                    aria-label="Camera field of view"
-                  />
-                  <span className="sk-ctx-val">{selectedCamera.fov}°</span>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* ── Action buttons ── */}
-      <div className="sk-ctx-actions">
-        {/* Item rotate button */}
-        {menu.type === "item" && onRotate && (
-          <button
-            type="button"
-            className="sk-ctx-btn"
-            onClick={onRotate}
-            title="Rotate 45° clockwise"
-          >
-            <span>↻</span> Rotate 45°
-          </button>
-        )}
-
-        {/* Camera action buttons */}
-        {menu.type === "camera" && selectedCamera && (
-          <div className="sk-ctx-btn-row">
-            {onSwitchCamera && (
-              <button
-                type="button"
-                className="sk-ctx-btn"
-                onClick={() => onSwitchCamera(selectedCamera)}
-                title="Switch viewpoint to this camera angle"
-              >
-                <span>👁</span> Look Through
-              </button>
-            )}
-            {onCaptureCamera && (
-              <button
-                type="button"
-                className="sk-ctx-btn"
-                onClick={() => onCaptureCamera(selectedCamera)}
-                title="Capture high-resolution photo"
-              >
-                <span>📸</span> Snap Photo
-              </button>
-            )}
+          <div className="sk-insp-grid">
+            {onOpeningWidth && <NumberField label="Width" value={selectedOpening.w} min={0.4} max={3.5} step={0.05} onCommit={onOpeningWidth} />}
+            {onOpeningHeight && <NumberField label="Height" value={selectedOpening.h ?? (selectedOpening.type === "window" ? 1.2 : 2.1)} min={0.4} max={3.5} step={0.05} onCommit={onOpeningHeight} />}
+            {selectedOpening.type === "window" && onOpeningSill && <NumberField label="Sill height" value={selectedOpening.sillHeight ?? 0.9} min={0} max={2.2} step={0.05} onCommit={onOpeningSill} />}
           </div>
         )}
 
-        <div className="sk-ctx-divider" />
+        {menu.type === "camera" && selectedCamera && (
+          <>
+            {onCameraHeight && <NumberField label="Elevation" value={selectedCamera.heightM} min={0.3} max={6} step={0.1} onCommit={onCameraHeight} />}
+            {onCameraFov && (
+              <label className="sk-insp-field">
+                <span>Field of view</span>
+                <span className="sk-insp-range">
+                  <input type="range" min="25" max="95" step="5" value={selectedCamera.fov} onChange={(e) => onCameraFov(parseFloat(e.target.value) || 55)} aria-label="Camera field of view" />
+                  <output>{selectedCamera.fov}°</output>
+                </span>
+              </label>
+            )}
+          </>
+        )}
+      </div>
 
-        <button
-          type="button"
-          className="sk-ctx-btn sk-ctx-danger"
-          onClick={onDelete}
-          title="Delete selected element"
-          aria-label="Delete selected element"
-        >
-          <span>✕</span> Delete Element
+      <div className="sk-ctx-actions">
+        {menu.type === "item" && onRotate && (
+          <button type="button" className="sk-ctx-btn" onClick={onRotate} title="Rotate 45° clockwise (R)">
+            <SkIcon name="rotate" size={15} /> Rotate 45°
+          </button>
+        )}
+        {menu.type === "camera" && selectedCamera && onSwitchCamera && (
+          <button type="button" className="sk-ctx-btn" onClick={() => onSwitchCamera(selectedCamera)} title="Switch viewpoint to this camera">
+            <SkIcon name="eye-level" size={15} /> Look through
+          </button>
+        )}
+        {menu.type === "camera" && selectedCamera && onCaptureCamera && (
+          <button type="button" className="sk-ctx-btn" onClick={() => onCaptureCamera(selectedCamera)} title="Download a 1920×1080 snapshot">
+            <SkIcon name="camera" size={15} /> Snapshot
+          </button>
+        )}
+        <button type="button" className="sk-ctx-btn sk-ctx-danger" onClick={onDelete} title="Delete (Del)" aria-label="Delete selected element">
+          <SkIcon name="trash" size={15} /> Delete
         </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -478,8 +351,16 @@ export default function SketchSpacePage() {
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
 
+    // Keep the plan framed while the layout settles (fonts, panels, sidebar)
+    // until the user takes control of the camera.
+    let userMovedView = false;
+    const markInteracted = () => { userMovedView = true; };
+    canvas.addEventListener("pointerdown", markInteracted, { passive: true });
+    canvas.addEventListener("wheel", markInteracted, { passive: true });
     const ro = new ResizeObserver(() => {
-      engineRef.current?.triggerResize();
+      const eng = engineRef.current;
+      if (!eng) return;
+      if (!userMovedView) eng.fitToPlan(); else eng.triggerResize();
     });
     ro.observe(canvas.parentElement ?? canvas);
 
@@ -503,6 +384,8 @@ export default function SketchSpacePage() {
       offTool();
       offView();
       canvas.removeEventListener("pointermove", dismissOnPan);
+      canvas.removeEventListener("pointerdown", markInteracted);
+      canvas.removeEventListener("wheel", markInteracted);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       engine.destroy();
@@ -666,7 +549,7 @@ export default function SketchSpacePage() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("GLB export failed:", err);
-      alert("GLB export failed. See console for details.");
+      setPageNotice("GLB export failed. Try again, or export SVG/JSON instead.");
     }
   }, []);
 
@@ -683,7 +566,7 @@ export default function SketchSpacePage() {
       URL.revokeObjectURL(url);
       setIsRecording(false);
     }, seconds);
-    if (!started) alert("Walkthrough recording is not supported by this browser. Try a current desktop Chrome or Firefox.");
+    if (!started) setPageNotice("Walkthrough recording is not supported by this browser. Try a current desktop Chrome or Firefox.");
     if (started) setIsRecording(true);
   }, []);
 
@@ -757,7 +640,7 @@ export default function SketchSpacePage() {
       const blob=await (await fetch(eng.captureTopDown())).blob();
       const asset=await addAsset(new File([blob],"sketch-floor-plan.png",{type:"image/png"}));
       window.location.href=`/dashboard?asset=${asset.id}`;
-    } catch { alert("Could not send this sketch to Workspace. Export the SVG or JSON to keep a copy."); }
+    } catch { setPageNotice("Could not send this sketch to Workspace. Export the SVG or JSON to keep a copy."); }
   }, []);
 
   const handleSendTo3D = useCallback(() => {
@@ -767,6 +650,27 @@ export default function SketchSpacePage() {
   const sceneSummary = sceneData
     ? engineRef.current?.getSceneSummary() ?? "Empty scene"
     : "Empty scene";
+
+  const isSelecting = activeTool === "select" || activeTool === "box-select";
+  const selectedRoom = contextMenu?.type === "room" ? sceneData?.rooms.find(r => r.id === contextMenu.id) : undefined;
+  const scaleBarPx = Math.max(24, Math.min(120, 1 / viewport.metresPerPixel));
+  const scaleBarLabel = 1 / viewport.metresPerPixel < 24 ? `${(24 * viewport.metresPerPixel).toFixed(1)} m` : "1 m";
+  const isEmpty = !!sceneData && !sceneData.walls.length && !sceneData.rooms.length && !sceneData.items.length && !sceneData.reference;
+
+  const hint = activeView !== "top"
+    ? <>Drag to orbit · right-drag to pan · scroll to zoom{activeView === "eye-level" ? <> · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows to walk</> : <> · select an item to use the gizmo</>}</>
+    : ({
+        wall: <>Click to start, click to place each corner · <kbd>Esc</kbd> to finish</>,
+        room: <>Click one corner, then the opposite corner</>,
+        door: <>Click on a wall to cut a door</>,
+        window: <>Click on a wall to add a window</>,
+        furniture: <>Click to place <strong>{activeFurniture}</strong> · <kbd>R</kbd> in Select rotates</>,
+        camera: <>Drag from the camera position towards what it should look at</>,
+        label: <>Click on the floor to add a label</>,
+        eraser: <>Click an element to erase it</>,
+        select: <>Click to select · <kbd>Shift</kbd>-click to add · drag to move · <kbd>Del</kbd> deletes</>,
+        "box-select": <>Drag a box around objects · <kbd>Shift</kbd> adds to the selection</>,
+      } as Record<ToolKind, React.ReactNode>)[activeTool];
 
   return (
     <StudioShell
@@ -778,15 +682,10 @@ export default function SketchSpacePage() {
     >
       <div className={`sk-page${panelOpen ? " sk-panel-open" : ""}`}>
         <ProjectBar engine={engine} onExport={handleExportJSON} />
-        <div className="sk-navigation"><button type="button" onClick={() => engine?.fitToPlan()}>Fit to plan</button><button type="button" onClick={() => engine?.resetView()}>Reset view</button><span aria-label="Canvas zoom">{viewport.zoom}%</span><span className="sk-cursor-coordinates">X {cursor[0].toFixed(2)} · Z {cursor[1].toFixed(2)} m</span><span className="sk-scale" style={{width: Math.min(120, 1 / viewport.metresPerPixel)}}>1 m</span><button className="sk-panel-toggle" type="button" aria-expanded={panelOpen} onClick={() => setPanelOpen(!panelOpen)}>{panelOpen ? "Close design panel" : "Render & design"}</button></div>
-        {pageNotice && <p className="sk-project-error" role="alert">{pageNotice}</p>}
-        <TracePanel engine={engine} reference={sceneData?.reference} />
-        {(activeTool === "select" || activeTool === "box-select") && <SelectionBar engine={engine} objects={selection} canPaste={canPaste} />}
-        {/* Toolbar */}
+
         <SketchToolbar
           activeTool={activeTool}
           activeView={activeView}
-          activeFurniture={activeFurniture}
           orthogonalLock={orthogonalLock}
           canUndo={canUndo}
           canRedo={canRedo}
@@ -795,9 +694,7 @@ export default function SketchSpacePage() {
           floors={floors}
           activeFloorId={activeFloorId}
           gizmoMode={gizmoMode}
-          onTool={handleTool}
           onView={handleView}
-          onFurniture={handleFurniture}
           onOrthogonalLock={handleOrthogonal}
           onUndo={handleUndo}
           onRedo={handleRedo}
@@ -808,62 +705,81 @@ export default function SketchSpacePage() {
           onAddFloor={handleAddFloor}
           onDeleteFloor={handleDeleteFloor}
           onGizmoModeChange={handleGizmoModeChange}
-        />
+        >
+          <button className="sk-panel-toggle sk-opt-btn" type="button" aria-label={panelOpen ? "Close design panel" : "Render & design"} aria-expanded={panelOpen} onClick={() => setPanelOpen(!panelOpen)}>
+            <SkIcon name="panel" size={16} />
+            <span>{panelOpen ? "Close design panel" : "Render & design"}</span>
+          </button>
+        </SketchToolbar>
 
-        {/* Main area */}
         <div className="sk-main">
-          {/* Canvas */}
-          <div className="sk-canvas-wrap" aria-label="3D drawing canvas">
+          <ToolRail activeTool={activeTool} onTool={handleTool} />
+
+          <div className="sk-canvas-wrap">
             <canvas
               ref={canvasRef}
               className="sk-canvas"
               tabIndex={0}
-              aria-label={`Sketch canvas — ${activeView} view. Use drawing tools on the left.`}
+              aria-label={`Sketch canvas — ${activeView} view. Use the drawing tools on the left.`}
             />
 
-            {/* View badge */}
-            <div className="sk-view-badge" aria-hidden="true">
-              <span className="sk-view-badge-dot" />
-              {activeView === "top"
-                ? "Top-down · 2D Plan"
-                : activeView === "perspective"
-                ? "3D Perspective · Orbit"
-                : "Eye-level · First-Person Walk"}
+            {/* Top-left: contextual palette */}
+            {activeTool === "furniture" && (
+              <div className="sk-overlay sk-overlay-tl">
+                <FurniturePalette active={activeFurniture} onPick={handleFurniture} />
+              </div>
+            )}
+
+            {/* Top-right: tracing */}
+            <div className="sk-overlay sk-overlay-tr">
+              <TracePanel engine={engine} reference={sceneData?.reference} />
             </div>
 
-            {/* Corner hint */}
-            {activeView === "top" && (
-              <div className="sk-hint" aria-hidden="true">
-                {activeTool === "wall" && <span>Click to start wall · click to end · <kbd>Esc</kbd> to cancel</span>}
-                {activeTool === "room" && <span>Click first corner · drag/click opposite corner</span>}
-                {activeTool === "door" && <span>Click near wall to place door cutout</span>}
-                {activeTool === "window" && <span>Click near wall to place window with sill</span>}
-                {activeTool === "furniture" && <span>Click to place <strong>{activeFurniture}</strong></span>}
-                {activeTool === "camera" && <span>Drag on floor to position virtual camera & target</span>}
-                {activeTool === "label" && <span>Click on floor to place room label</span>}
-                {activeTool === "eraser" && <span>Click element to erase</span>}
-                {activeTool === "select" && <span>Shift-click to multi-select · drag a selection to move it · <kbd>Del</kbd> to delete</span>}
-                {activeTool === "box-select" && <span>Drag around objects to select them · hold Shift to add to selection</span>}
-                <div style={{ marginTop: "4px", opacity: 0.8, fontSize: "9.5px" }}>
-                  Hold <kbd>Space</kbd> to pan · Hold <kbd>Alt</kbd> to disable snap · Hold <kbd>⇧ Shift</kbd> for orthogonal lock
-                </div>
+            {/* Top-left: selection actions */}
+            {isSelecting && (
+              <div className="sk-overlay sk-overlay-tl">
+                <SelectionBar engine={engine} objects={selection} canPaste={canPaste} />
               </div>
             )}
 
-            {activeView !== "top" && (
-              <div className="sk-hint" aria-hidden="true">
-                Left drag to orbit · Right drag or <kbd>Space</kbd> to pan · Scroll to zoom · Select items to manipulate with 3D gizmo
+            {isEmpty && activeView === "top" && (
+              <div className="sk-empty" aria-hidden="true">
+                <strong>Start your plan</strong>
+                <span>Pick <b>Wall</b> or <b>Room</b> on the left and click on the grid, trace an existing plan, or generate a layout from the <b>AI Plan</b> tab.</span>
               </div>
             )}
 
+            {pageNotice && (
+              <div className="sk-toast" role="alert">
+                <span>{pageNotice}</span>
+                <button type="button" aria-label="Dismiss message" onClick={() => setPageNotice("")}><SkIcon name="close" size={13} /></button>
+              </div>
+            )}
 
+            {/* Bottom: hint + status/navigation */}
+            <div className="sk-statusbar">
+              <div className="sk-hint" aria-hidden="true">{hint}</div>
+              <div className="sk-navigation" role="group" aria-label="Canvas navigation">
+                <span className="sk-cursor-coordinates" title="Cursor position">X {cursor[0].toFixed(2)} · Z {cursor[1].toFixed(2)} m</span>
+                <span className="sk-scale" title="Scale"><i style={{ width: scaleBarPx }} />{scaleBarLabel}</span>
+                <span className="sk-nav-sep" aria-hidden="true" />
+                <button type="button" className="sk-nav-icon" onClick={() => engine?.zoomBy(1 / 1.25)} aria-label="Zoom out" title="Zoom out (Ctrl + scroll)" disabled={activeView !== "top"}><SkIcon name="minus" size={14} /></button>
+                <span className="sk-zoom" aria-label="Canvas zoom">{viewport.zoom}%</span>
+                <button type="button" className="sk-nav-icon" onClick={() => engine?.zoomBy(1.25)} aria-label="Zoom in" title="Zoom in (Ctrl + scroll)" disabled={activeView !== "top"}><SkIcon name="plus" size={14} /></button>
+                <button type="button" className="sk-nav-btn" onClick={() => engine?.fitToPlan()} aria-label="Fit to plan" title="Frame the whole plan"><SkIcon name="fit" size={14} /><span>Fit to plan</span></button>
+                <button type="button" className="sk-nav-btn" onClick={() => engine?.resetView()} aria-label="Reset view" title="Back to the 2D plan, framed"><SkIcon name="reset" size={14} /><span>Reset view</span></button>
+              </div>
+            </div>
           </div>
 
-          {/* Selection properties and render controls remain in one stable panel. */}
+          {/* Selection properties and render controls share one stable panel. */}
           <div className="sk-design-panel">
-          {contextMenu?.type === "room" && sceneData?.rooms.find(r => r.id === contextMenu.id) && <RoomProperties room={sceneData.rooms.find(r => r.id === contextMenu.id)!} onUpdate={updates => engine?.updateRoom(contextMenu.id, updates)} onDelete={handleContextDelete} />}
-            {/* Contextual floating toolbar */}
-            {contextMenu && contextMenu.type !== "room" && activeTool === "select" && (
+            <div className="sk-design-panel-head">
+              <span>Design panel</span>
+              <button type="button" className="sk-nav-icon" aria-label="Hide design panel" onClick={() => setPanelOpen(false)}><SkIcon name="close" size={14} /></button>
+            </div>
+            {selectedRoom && <RoomProperties room={selectedRoom} onUpdate={updates => engine?.updateRoom(selectedRoom.id, updates)} onDelete={handleContextDelete} onDismiss={() => setContextMenu(null)} />}
+            {contextMenu && contextMenu.type !== "room" && isSelecting && (
               <ContextualToolbar
                 menu={contextMenu}
                 scene={sceneData}
@@ -883,28 +799,28 @@ export default function SketchSpacePage() {
                 onDismiss={() => setContextMenu(null)}
               />
             )}
-          <RenderPanel
-            sceneSummary={sceneSummary}
-            sceneData={sceneData}
-            onCapture={handleCapture}
-            onGetProject={() => engine!.getProject()}
-            onReorderCamera={(id,direction) => engine?.reorderCamera(id,direction)}
-            onExportGLB={handleExportGLB}
-            onExportSVG={handleExportSVG}
-            onExportJSON={handleExportJSON}
-            onStartWalkthrough={handleStartWalkthrough}
-            onStopWalkthrough={handleStopWalkthrough}
-            isRecording={isRecording}
-            onSendToFloorPlan={handleSendToFloorPlan}
-            onSendTo3D={handleSendTo3D}
-            onApplyRoomMaterial={handleApplyRoomMaterial}
-            onAddVirtualCamera={handleAddVirtualCamera}
-            onSwitchCamera={handleSwitchCamera}
-            onCaptureCamera={handleCaptureCamera}
-            onDeleteCamera={handleDeleteCamera}
-            onUpdateCamera={handleUpdateCamera}
-            onLoadGeneratedPlan={handleLoadGeneratedPlan}
-          />
+            <RenderPanel
+              sceneSummary={sceneSummary}
+              sceneData={sceneData}
+              onCapture={handleCapture}
+              onGetProject={() => engine!.getProject()}
+              onReorderCamera={(id,direction) => engine?.reorderCamera(id,direction)}
+              onExportGLB={handleExportGLB}
+              onExportSVG={handleExportSVG}
+              onExportJSON={handleExportJSON}
+              onStartWalkthrough={handleStartWalkthrough}
+              onStopWalkthrough={handleStopWalkthrough}
+              isRecording={isRecording}
+              onSendToFloorPlan={handleSendToFloorPlan}
+              onSendTo3D={handleSendTo3D}
+              onApplyRoomMaterial={handleApplyRoomMaterial}
+              onAddVirtualCamera={handleAddVirtualCamera}
+              onSwitchCamera={handleSwitchCamera}
+              onCaptureCamera={handleCaptureCamera}
+              onDeleteCamera={handleDeleteCamera}
+              onUpdateCamera={handleUpdateCamera}
+              onLoadGeneratedPlan={handleLoadGeneratedPlan}
+            />
           </div>
         </div>
       </div>
