@@ -6,6 +6,12 @@ import type { SelectionChangeData } from "../../../components/sketch-space/engin
 import { SketchToolbar } from "../../../components/sketch-space/SketchToolbar";
 import { RenderPanel } from "../../../components/sketch-space/RenderPanel";
 import { StudioShell } from "../../../components/dashboard/StudioShell";
+import { PLAN_TEMPLATES } from "../../../components/sketch-space/templates";
+import {
+  BUILTIN_MATERIALS,
+  isProject,
+  isValidScene,
+} from "../../../components/sketch-space/types";
 import type {
   ToolKind,
   ViewMode,
@@ -22,14 +28,43 @@ import type {
 interface ContextMenu {
   screenX: number;
   screenY: number;
-  type: "item" | "wall" | "opening" | "camera";
+  type: "item" | "wall" | "opening" | "camera" | "room";
   id: string;
+}
+
+/** Text field that only commits on blur / Enter, so typing a name is one undo step. */
+function CommitInput({ value, onCommit, ariaLabel }: { value: string; onCommit: (v: string) => void; ariaLabel: string }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    const v = draft.trim();
+    if (v && v !== value) onCommit(v);
+    else setDraft(value);
+  };
+  return (
+    <input
+      type="text"
+      className="sk-ctx-input sk-ctx-input-text"
+      value={draft}
+      maxLength={40}
+      aria-label={ariaLabel}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") { setDraft(value); (e.target as HTMLInputElement).blur(); }
+      }}
+    />
+  );
 }
 
 function ContextualToolbar({
   menu,
   scene,
   onRotate,
+  onDuplicate,
+  onRoomName,
+  onRoomMaterial,
   onScaleChange,
   onWallHeight,
   onWallThickness,
@@ -47,6 +82,9 @@ function ContextualToolbar({
   menu: ContextMenu;
   scene: Scene | null;
   onRotate?: () => void;
+  onDuplicate?: () => void;
+  onRoomName?: (name: string) => void;
+  onRoomMaterial?: (materialId: string) => void;
   onScaleChange?: (scale: number) => void;
   onWallHeight?: (h: number) => void;
   onWallThickness?: (th: number) => void;
@@ -65,11 +103,15 @@ function ContextualToolbar({
   const selectedWall = scene?.walls.find((w) => w.id === menu.id);
   const selectedOpening = scene?.openings.find((o) => o.id === menu.id);
   const selectedCamera = scene?.virtualCameras?.find((c) => c.id === menu.id);
+  const selectedRoom = scene?.rooms.find((r) => r.id === menu.id);
+  const wallLength = selectedWall
+    ? Math.hypot(selectedWall.b[0] - selectedWall.a[0], selectedWall.b[1] - selectedWall.a[1])
+    : 0;
 
   const winW = typeof window !== "undefined" ? window.innerWidth : 1280;
   const winH = typeof window !== "undefined" ? window.innerHeight : 800;
   const cardW = 252;
-  const cardH = 280;
+  const cardH = 320;
   const left = Math.min(Math.max(12, menu.screenX - cardW / 2), winW - cardW - 16);
   const top = Math.min(Math.max(64, menu.screenY - 30), winH - cardH - 20);
 
@@ -78,6 +120,7 @@ function ContextualToolbar({
     wall: "🧱",
     opening: selectedOpening?.type === "window" ? "🪟" : "🚪",
     camera: "📷",
+    room: "▦",
   };
 
   const typeTitles: Record<string, string> = {
@@ -85,6 +128,7 @@ function ContextualToolbar({
     wall: "Wall Section",
     opening: selectedOpening ? `${selectedOpening.type.charAt(0).toUpperCase() + selectedOpening.type.slice(1)}` : "Wall Opening",
     camera: selectedCamera?.name ?? "Virtual Camera",
+    room: selectedRoom?.name ?? "Room",
   };
 
   const WALL_MATERIALS = [
@@ -144,9 +188,53 @@ function ContextualToolbar({
           </>
         )}
 
+        {/* Room properties */}
+        {menu.type === "room" && selectedRoom && (
+          <>
+            {onRoomName && (
+              <div className="sk-ctx-row">
+                <span className="sk-ctx-label">Name</span>
+                <div className="sk-ctx-control">
+                  <CommitInput value={selectedRoom.name} onCommit={onRoomName} ariaLabel="Room name" />
+                </div>
+              </div>
+            )}
+            <div className="sk-ctx-row">
+              <span className="sk-ctx-label">Size</span>
+              <span className="sk-ctx-val sk-ctx-val-wide">
+                {selectedRoom.w.toFixed(1)} × {selectedRoom.d.toFixed(1)} m · {(selectedRoom.w * selectedRoom.d).toFixed(1)} m²
+              </span>
+            </div>
+            {onRoomMaterial && (
+              <div className="sk-ctx-row" style={{ alignItems: "flex-start", paddingTop: "4px" }}>
+                <span className="sk-ctx-label" style={{ paddingTop: "2px" }}>Floor</span>
+                <div className="sk-ctx-swatches">
+                  {BUILTIN_MATERIALS.filter((m) => m.category === "floor").map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`sk-ctx-swatch ${selectedRoom.materialId === m.id ? "active" : ""}`}
+                      style={{ background: m.previewColor }}
+                      onClick={() => onRoomMaterial(m.id)}
+                      title={m.name}
+                      aria-label={m.name}
+                      aria-pressed={selectedRoom.materialId === m.id}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="sk-ctx-tip">Drag the room to move it with its walls and furniture.</p>
+          </>
+        )}
+
         {/* Wall properties */}
         {menu.type === "wall" && selectedWall && (
           <>
+            <div className="sk-ctx-row">
+              <span className="sk-ctx-label">Length</span>
+              <span className="sk-ctx-val sk-ctx-val-wide">{wallLength.toFixed(2)} m</span>
+            </div>
             {onWallHeight && (
               <div className="sk-ctx-row">
                 <span className="sk-ctx-label">Height</span>
@@ -310,15 +398,19 @@ function ContextualToolbar({
       {/* ── Action buttons ── */}
       <div className="sk-ctx-actions">
         {/* Item rotate button */}
-        {menu.type === "item" && onRotate && (
-          <button
-            type="button"
-            className="sk-ctx-btn"
-            onClick={onRotate}
-            title="Rotate 45° clockwise"
-          >
-            <span>↻</span> Rotate 45°
-          </button>
+        {menu.type === "item" && (onRotate || onDuplicate) && (
+          <div className="sk-ctx-btn-row">
+            {onRotate && (
+              <button type="button" className="sk-ctx-btn" onClick={onRotate} title="Rotate 45° (R)">
+                <span>↻</span> Rotate
+              </button>
+            )}
+            {onDuplicate && (
+              <button type="button" className="sk-ctx-btn" onClick={onDuplicate} title="Duplicate (Ctrl+D)">
+                <span>⧉</span> Duplicate
+              </button>
+            )}
+          </div>
         )}
 
         {/* Camera action buttons */}
@@ -356,7 +448,7 @@ function ContextualToolbar({
           title="Delete selected element"
           aria-label="Delete selected element"
         >
-          <span>✕</span> Delete Element
+          <span>✕</span> Delete {menu.type === "room" ? "room floor" : menu.type === "item" ? "item" : menu.type}
         </button>
       </div>
     </div>
@@ -394,6 +486,17 @@ export default function SketchSpacePage() {
 
   // 3D gizmo mode (Feature B2)
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>("translate");
+
+  // Starter-plan overlay (shown on an empty sheet) and transient status message
+  const [startDismissed, setStartDismissed] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; tone: "ok" | "error" } | null>(null);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showNotice = useCallback((text: string, tone: "ok" | "error" = "ok") => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    setNotice({ text, tone });
+    noticeTimer.current = setTimeout(() => setNotice(null), 5000);
+  }, []);
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
 
   // Initialise the engine once the canvas is mounted
   useEffect(() => {
@@ -464,12 +567,21 @@ export default function SketchSpacePage() {
     });
     ro.observe(canvas.parentElement ?? canvas);
 
-    // Dismiss context menu on tool-change
-    const offTool = engine.on("tool-change", () => setContextMenu(null));
+    // Keep the toolbar in step with the engine: keyboard shortcuts and camera
+    // actions change the tool / view from inside the engine.
+    const offTool = engine.on("tool-change", (t) => {
+      setActiveTool(t as ToolKind);
+      setContextMenu(null);
+    });
     // B-6: Also dismiss on view change (coordinates become invalid in new projection)
-    const offView = engine.on("view-change", () => setContextMenu(null));
+    const offView = engine.on("view-change", (v) => {
+      setActiveView(v as ViewMode);
+      setContextMenu(null);
+    });
 
     // Initial sync
+    setActiveTool(engine.activeTool);
+    setActiveView(engine.activeView);
     setSceneData(engine.getScene());
     setFloors([...engine.getFloors()]);
     setActiveFloorId(engine.getActiveFloorId());
@@ -552,6 +664,20 @@ export default function SketchSpacePage() {
   const handleContextRotate = useCallback(() => {
     engineRef.current?.rotateSelected();
   }, []);
+
+  const handleContextDuplicate = useCallback(() => {
+    engineRef.current?.duplicateSelected();
+  }, []);
+
+  const handleContextRoomName = useCallback((name: string) => {
+    if (!contextMenu || contextMenu.type !== "room") return;
+    engineRef.current?.updateRoom(contextMenu.id, { name });
+  }, [contextMenu]);
+
+  const handleContextRoomMaterial = useCallback((materialId: string) => {
+    if (!contextMenu || contextMenu.type !== "room") return;
+    engineRef.current?.updateRoom(contextMenu.id, { materialId });
+  }, [contextMenu]);
 
   const handleContextScale = useCallback((scale: number) => {
     if (!contextMenu || contextMenu.type !== "item") return;
@@ -642,11 +768,43 @@ export default function SketchSpacePage() {
       a.download = `scene-${Date.now()}.glb`;
       a.click();
       URL.revokeObjectURL(url);
+      showNotice("3D model saved as a .glb file.");
     } catch (err) {
       console.error("GLB export failed:", err);
-      alert("GLB export failed. See console for details.");
+      showNotice("Couldn't export the 3D model. Try again after drawing at least one wall.", "error");
     }
-  }, []);
+  }, [showNotice]);
+
+  // ── Open a saved project (the JSON written by "Save JSON") ───────────────
+  const handleImportJSON = useCallback(async (file: File) => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    try {
+      const data: unknown = JSON.parse(await file.text());
+      if (isProject(data) && data.floors.length > 0 && data.floors.every((f) => isValidScene(f.scene))) {
+        eng.setProject(data);
+        setFloors([...eng.getFloors()]);
+        setActiveFloorId(eng.getActiveFloorId());
+        showNotice(`Opened "${file.name}" — ${data.floors.length} floor${data.floors.length === 1 ? "" : "s"}.`);
+      } else if (isValidScene(data)) {
+        eng.loadScene(data);
+        showNotice(`Opened "${file.name}". Press Ctrl+Z to go back.`);
+      } else {
+        showNotice("That file isn't a Sketch Space project.", "error");
+      }
+    } catch {
+      showNotice("Couldn't read that file — it isn't valid JSON.", "error");
+    }
+  }, [showNotice]);
+
+  const handleTemplate = useCallback((templateId: string) => {
+    const tpl = PLAN_TEMPLATES.find((t) => t.id === templateId);
+    if (!tpl) return;
+    engineRef.current?.loadScene(tpl.build());
+    engineRef.current?.setTool("select");
+    setStartDismissed(true);
+    showNotice(`${tpl.label} loaded. Press 2 to see it in 3D.`);
+  }, [showNotice]);
 
   // ── Walkthrough recording ─────────────────────────────────────────────────
   const handleStartWalkthrough = useCallback(() => {
@@ -713,19 +871,12 @@ export default function SketchSpacePage() {
   }, []);
 
   const handleLoadGeneratedPlan = useCallback((generatedScene: Scene) => {
-    // F-6: Confirm before wiping current floor — AI plan load is destructive
-    const hasContent =
-      (sceneData?.walls.length ?? 0) > 0 ||
-      (sceneData?.rooms.length ?? 0) > 0 ||
-      (sceneData?.items.length ?? 0) > 0;
-    if (hasContent) {
-      const ok = window.confirm(
-        "Load AI-generated plan?\n\nThis will replace the current floor's content. Your other floors will be preserved.\n\nClick OK to continue, or Cancel to keep your existing layout."
-      );
-      if (!ok) return;
-    }
+    // Loading replaces the current floor, but it is a normal undo step now,
+    // so there is no blocking confirm — Ctrl+Z brings the old layout back.
     engineRef.current?.loadScene(generatedScene);
-  }, [sceneData]);
+    engineRef.current?.setTool("select");
+    setStartDismissed(true);
+  }, []);
 
   // ── Send to workspace cards ───────────────────────────────────────────────
   const handleSendToFloorPlan = useCallback(() => {
@@ -739,6 +890,22 @@ export default function SketchSpacePage() {
   const sceneSummary = sceneData
     ? engineRef.current?.getSceneSummary() ?? "Empty scene"
     : "Empty scene";
+
+  const sceneIsEmpty =
+    !sceneData || (!sceneData.walls.length && !sceneData.rooms.length && !sceneData.items.length);
+  const showStart = sceneIsEmpty && !startDismissed && activeView === "top" && floors.length <= 1;
+  const stats = {
+    rooms: sceneData?.rooms.length ?? 0,
+    area: sceneData?.rooms.reduce((sum, r) => sum + r.w * r.d, 0) ?? 0,
+    wallLength:
+      sceneData?.walls.reduce((sum, w) => sum + Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]), 0) ?? 0,
+    items: sceneData?.items.filter((i) => i.kind !== "label").length ?? 0,
+  };
+  const VIEW_TABS: { mode: ViewMode; label: string; key: string }[] = [
+    { mode: "top", label: "2D plan", key: "1" },
+    { mode: "perspective", label: "3D model", key: "2" },
+    { mode: "eye-level", label: "Walk inside", key: "3" },
+  ];
 
   return (
     <StudioShell
@@ -788,37 +955,99 @@ export default function SketchSpacePage() {
               aria-label={`Sketch canvas — ${activeView} view. Use drawing tools on the left.`}
             />
 
-            {/* View badge */}
-            <div className="sk-view-badge" aria-hidden="true">
-              <span className="sk-view-badge-dot" />
-              {activeView === "top"
-                ? "Top-down · 2D Plan"
-                : activeView === "perspective"
-                ? "3D Perspective · Orbit"
-                : "Eye-level · First-Person Walk"}
+            <div className="sk-topleft">
+            {/* View switcher — the 2D ⇄ 3D toggle lives on the canvas itself */}
+            <div className="sk-viewbar" role="tablist" aria-label="View">
+              {VIEW_TABS.map((v) => (
+                <button
+                  key={v.mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeView === v.mode}
+                  className={`sk-viewbar-btn ${activeView === v.mode ? "active" : ""}`}
+                  onClick={() => handleView(v.mode)}
+                  title={`${v.label} (${v.key})`}
+                >
+                  {v.label}
+                  <kbd>{v.key}</kbd>
+                </button>
+              ))}
             </div>
 
+            {/* Plan stats */}
+            {!sceneIsEmpty && (
+              <div className="sk-stats" aria-label="Plan summary">
+                <span><strong>{stats.rooms}</strong> room{stats.rooms === 1 ? "" : "s"}</span>
+                <span><strong>{stats.area.toFixed(1)}</strong> m² floor</span>
+                <span><strong>{stats.wallLength.toFixed(1)}</strong> m walls</span>
+                <span><strong>{stats.items}</strong> item{stats.items === 1 ? "" : "s"}</span>
+              </div>
+            )}
+            </div>
+
+            {/* Zoom controls */}
+            <div className="sk-zoom" role="group" aria-label="Zoom">
+              <button type="button" onClick={() => engineRef.current?.zoomBy(0.8)} title="Zoom out (−)" aria-label="Zoom out">−</button>
+              <button type="button" onClick={() => engineRef.current?.fitView()} title="Fit plan to view (0)" className="sk-zoom-fit">Fit</button>
+              <button type="button" onClick={() => engineRef.current?.zoomBy(1.25)} title="Zoom in (+)" aria-label="Zoom in">+</button>
+            </div>
+
+            {/* Starter overlay on an empty sheet */}
+            {showStart && (
+              <div className="sk-start" role="dialog" aria-label="Start a plan">
+                <p className="sk-start-eyebrow">Sketch Space</p>
+                <h2>Draw it flat. See it in 3D.</h2>
+                <p className="sk-start-copy">Start from a plan you can edit, or draw your own. Switch to the 3D model at any time.</p>
+                <div className="sk-start-grid">
+                  {PLAN_TEMPLATES.map((t) => (
+                    <button key={t.id} type="button" className="sk-start-card" onClick={() => handleTemplate(t.id)}>
+                      <strong>{t.label}</strong>
+                      <small>{t.hint}</small>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="sk-start-blank"
+                  onClick={() => { setStartDismissed(true); handleTool("room"); }}
+                >
+                  Start from a blank sheet →
+                </button>
+              </div>
+            )}
+
+            {notice && (
+              <div className={`sk-notice ${notice.tone === "error" ? "sk-notice-error" : ""}`} role="status">
+                {notice.text}
+              </div>
+            )}
+
             {/* Corner hint */}
-            {activeView === "top" && (
+            {activeView === "top" && !showStart && (
               <div className="sk-hint" aria-hidden="true">
-                {activeTool === "wall" && <span>Click to start wall · click to end · <kbd>Esc</kbd> to cancel</span>}
-                {activeTool === "room" && <span>Click first corner · drag/click opposite corner</span>}
+                {activeTool === "wall" && <span>Click to start · click to add corners · double-click or <kbd>Esc</kbd> to finish</span>}
+                {activeTool === "room" && <span>Click one corner, then the opposite corner · walls are added for you</span>}
                 {activeTool === "door" && <span>Click near wall to place door cutout</span>}
                 {activeTool === "window" && <span>Click near wall to place window with sill</span>}
                 {activeTool === "furniture" && <span>Click to place <strong>{activeFurniture}</strong></span>}
                 {activeTool === "camera" && <span>Drag on floor to position virtual camera & target</span>}
                 {activeTool === "label" && <span>Click on floor to place room label</span>}
                 {activeTool === "eraser" && <span>Click element to erase</span>}
-                {activeTool === "select" && <span>Click element to inspect & configure · drag wall nodes · <kbd>Del</kbd> to delete</span>}
+                {activeTool === "select" && <span>Click anything to edit it · drag rooms, furniture and wall ends · <kbd>Del</kbd> to delete</span>}
                 <div style={{ marginTop: "4px", opacity: 0.8, fontSize: "9.5px" }}>
-                  Hold <kbd>Space</kbd> to pan · Hold <kbd>Alt</kbd> to disable snap · Hold <kbd>⇧ Shift</kbd> for orthogonal lock
+                  <kbd>Space</kbd>+drag to pan · <kbd>Ctrl</kbd>+scroll to zoom · <kbd>Alt</kbd> free placement · <kbd>⇧</kbd> straight walls
                 </div>
               </div>
             )}
 
-            {activeView !== "top" && (
+            {activeView === "perspective" && (
               <div className="sk-hint" aria-hidden="true">
-                Left drag to orbit · Right drag or <kbd>Space</kbd> to pan · Scroll to zoom · Select items to manipulate with 3D gizmo
+                Drag to orbit · right-drag to pan · scroll to zoom · <kbd>0</kbd> fit · <kbd>1</kbd> back to the 2D plan to edit
+              </div>
+            )}
+            {activeView === "eye-level" && (
+              <div className="sk-hint" aria-hidden="true">
+                <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to walk · <kbd>Q</kbd>/<kbd>E</kbd> to turn · drag to look around
               </div>
             )}
 
@@ -828,6 +1057,9 @@ export default function SketchSpacePage() {
                 menu={contextMenu}
                 scene={sceneData}
                 onRotate={contextMenu.type === "item" ? handleContextRotate : undefined}
+                onDuplicate={contextMenu.type === "item" ? handleContextDuplicate : undefined}
+                onRoomName={contextMenu.type === "room" ? handleContextRoomName : undefined}
+                onRoomMaterial={contextMenu.type === "room" ? handleContextRoomMaterial : undefined}
                 onScaleChange={contextMenu.type === "item" ? handleContextScale : undefined}
                 onWallHeight={contextMenu.type === "wall" ? handleContextWallHeight : undefined}
                 onWallThickness={contextMenu.type === "wall" ? handleContextWallThickness : undefined}
@@ -853,6 +1085,7 @@ export default function SketchSpacePage() {
             onExportGLB={handleExportGLB}
             onExportSVG={handleExportSVG}
             onExportJSON={handleExportJSON}
+            onImportJSON={handleImportJSON}
             onStartWalkthrough={handleStartWalkthrough}
             onStopWalkthrough={handleStopWalkthrough}
             isRecording={isRecording}

@@ -1,0 +1,31 @@
+###############################################################################
+# .gitignore for Terraform
+###############################################################################
+
+# Local state — NEVER commit these
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfstate.*.backup
+crash.log
+crash.*.log
+
+# Secret variables — NEVER commit these
+*.tfvars
+!*.tfvars.example
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform plan files
+*.tfplan
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

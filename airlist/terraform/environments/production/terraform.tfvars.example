@@ -1,0 +1,46 @@
+###############################################################################
+# terraform.tfvars.example
+# Copy to terraform.tfvars and fill in real values.
+# NEVER commit terraform.tfvars to version control.
+###############################################################################
+
+project_id = "project-a7a3fa03-8eb7-4ee7-b96"
+region     = "europe-west1"
+
+# Domains (configure DNS after first apply — see README)
+frontend_domain = "nglob.com"
+backend_domain  = "api.nglob.com"
+
+# Docker image tags — set by CI/CD to git commit SHA for immutable deploys
+backend_image_tag  = "latest"
+frontend_image_tag = "latest"
+
+# Cloud Run scaling — 1 warm instance keeps latency low without being expensive
+backend_min_instances  = 1
+backend_max_instances  = 10
+frontend_min_instances = 1
+frontend_max_instances = 5
+
+# Database
+db_name     = "nglob"
+db_user     = "nglob_app"
+db_password = "CHANGE_ME_STRONG_PASSWORD"
+
+# GCS
+gcs_bucket_name = "nglob-storage"
+
+# Stripe
+stripe_secret_key     = "sk_live_..."
+stripe_webhook_secret = "whsec_..."
+stripe_publishable_key = "pk_live_..."
+
+# JWT (use a password generator — min 64 chars)
+jwt_secret         = "CHANGE_ME_64_CHARS_MINIMUM"
+jwt_refresh_secret = "CHANGE_ME_DIFFERENT_64_CHARS_MINIMUM"
+
+# Google OAuth2
+google_client_id     = "908518767122-edm16b063mgicfeje8af66ng1toajiqq.apps.googleusercontent.com"
+google_client_secret = "GOCSPX-..."
+
+# Google Maps
+google_maps_key = "AIza..."

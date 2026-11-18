@@ -1,0 +1,10 @@
+nglobi
+?? app/graphify-out/
+?? components/graphify-out/
+?? graphify-out/
+?? lib/graphify-out/
+
+backend_alexis
+ M .eslintrc.js
+?? .dockerignore
+?? graphify-out/
