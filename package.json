@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "backend:dev": "npm --prefix ../homesketches-backendend run start:dev",
-    "backend:build": "npm --prefix ../homesketches-backendend run build"
+    "backend:dev": "npm --prefix ../sketchback run start:dev",
+    "backend:build": "npm --prefix ../sketchback run build",
+    "frontend:dev": "next dev",
+    "test:dashboard": "node scripts/check-dashboard.mjs",
+    "test:sketch": "node scripts/check-sketch.mjs",
+    "test:selection": "node scripts/check-selection-tracing.mjs"
   },
   "dependencies": {
     "@fal-ai/client": "^1.10.1",
@@ -27,6 +31,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "^15.3.5",
+    "playwright-core": "^1.65.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

@@ -84,6 +84,7 @@ export async function getDirection(text: string): Promise<Direction> {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(15000),
   });
   await checkResponse(res);
   return res.json() as Promise<Direction>;
@@ -121,6 +122,7 @@ export async function renderDirection(
     method: "POST",
     headers: headers(),
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120000),
   });
   await checkResponse(res);
   return res.json() as Promise<RenderResult>;

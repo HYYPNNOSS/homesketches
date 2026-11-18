@@ -162,7 +162,19 @@ export const BUILTIN_MATERIALS: MaterialPreset[] = [
   },
 ];
 
+export interface TraceReference {
+  name: string;
+  dataUrl: string;
+  center: Vec2;
+  widthM: number;
+  depthM: number;
+  opacity: number;
+  visible: boolean;
+  calibrated?: boolean;
+}
+
 export interface Scene {
+  reference?: TraceReference;
   unit: "m";
   canvas?: CanvasBounds;          // project extents
   walls: Wall[];
@@ -192,6 +204,7 @@ export interface FloorLevel {
 }
 
 export interface Project {
+  id?: string;
   unit: "m";
   name?: string;
   activeFloorId: string;
@@ -230,6 +243,7 @@ export type GizmoMode = "translate" | "rotate" | "scale";
 
 export type ToolKind =
   | "select"
+  | "box-select"
   | "wall"
   | "room"
   | "door"

@@ -19,7 +19,7 @@ export function StudioShell({ active, eyebrow, title, children, fullBleed, hideH
   return (
     <main className={`studio-shell ${isFolded ? "folded" : ""}`}>
       <aside className="studio-sidebar">
-        <button className="sidebar-toggle" onClick={() => setIsFolded(!isFolded)}>
+        <button type="button" aria-label={isFolded ? "Expand navigation" : "Collapse navigation"} className="sidebar-toggle" onClick={() => setIsFolded(!isFolded)}>
            {isFolded ? "→" : "←"}
         </button>
         <Link href="/" className="studio-brand">
@@ -37,17 +37,15 @@ export function StudioShell({ active, eyebrow, title, children, fullBleed, hideH
             >
               <span className="nav-icon">{icon}</span>
               <span className="nav-label">{label}</span>
-              {!isFolded && label === "Your projects" && <span className="nav-badge">04</span>}
             </Link>
           ))}
         </nav>
         <div className="studio-sidebar-bottom">
           {!isFolded && (
             <div className="studio-plan">
-              <span>Studio plan</span>
-              <strong>12 generations left</strong>
-              <div><i /></div>
-              <small>Resets in 18 days</small>
+              <span>Your workspace</span>
+              <strong>Ideas worth keeping</strong>
+              <small>Projects and assets saved in this browser</small>
             </div>
           )}
           <Link href="/" className="studio-back">
@@ -63,7 +61,7 @@ export function StudioShell({ active, eyebrow, title, children, fullBleed, hideH
               <p className="eyebrow">{eyebrow}</p>
               <h1>{title}</h1>
             </div>
-            <div className="studio-avatar">AK</div>
+            <Link className="studio-avatar" href="/dashboard/settings" aria-label="Account settings">⚙</Link>
           </header>
         )}
         <div className={`studio-content${fullBleed ? " studio-content-full" : ""}`}>

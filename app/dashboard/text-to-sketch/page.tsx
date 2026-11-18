@@ -4,10 +4,23 @@ import { useState } from "react";
 import { StudioShell } from "../../../components/dashboard/StudioShell";
 import { WorkspaceComposer } from "../../../components/dashboard/WorkspaceComposer";
 import type { Direction, RenderResult, ImageInput } from "../../../lib/roomwright";
+import { addAsset } from "../../../lib/workspace-store";
 import { toDataUrl } from "../../../lib/roomwright";
 
 export default function TextToSketchPage() {
   const [result, setResult] = useState<{ res: RenderResult; direction: Direction; images: ImageInput[] } | null>(null);
+
+  const [transferError, setTransferError] = useState("");
+  const [transferring, setTransferring] = useState(false);
+  async function useInWorkspace() {
+    if (!result || transferring) return;
+    setTransferring(true); setTransferError("");
+    try {
+      const blob = await (await fetch(toDataUrl(result.res))).blob();
+      const asset = await addAsset(new File([blob], "generated-render.png", { type: blob.type }));
+      window.location.href = `/dashboard?asset=${asset.id}`;
+    } catch (e) { setTransferError(e instanceof Error ? e.message : "Could not send render to Workspace."); setTransferring(false); }
+  }
 
   function handleResult(res: RenderResult, direction: Direction, images: ImageInput[]) {
     setResult({ res, direction, images });
@@ -70,6 +83,7 @@ export default function TextToSketchPage() {
                   <strong>{result.direction.room}</strong>
                 </div>
               )}
+              {transferError && <p role="alert">{transferError}</p>}
               <div className="tts-result-actions">
                 <a
                   href={toDataUrl(result.res)}
@@ -78,7 +92,7 @@ export default function TextToSketchPage() {
                 >
                   Download ↓
                 </a>
-                <a href="/dashboard" className="tts-action">Use in Workspace ↗</a>
+                <button type="button" disabled={transferring} onClick={useInWorkspace} className="tts-action">{transferring ? "Opening…" : "Use in Workspace ↗"}</button>
                 <button type="button" onClick={() => setResult(null)} className="tts-action tts-action-ghost">
                   Try again
                 </button>

@@ -84,33 +84,25 @@ export async function previewPrompt(params: {
 
 export async function render(
   req: RenderRequest,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal
 ): Promise<RenderResponse | RenderError> {
+  let interval: ReturnType<typeof setInterval> | undefined;
   try {
-    // Simulate progress updates during the 5-25 s range
     let pct = 0;
-    let interval: ReturnType<typeof setInterval> | null = null;
-    if (onProgress) {
-      interval = setInterval(() => {
-        pct = Math.min(pct + Math.random() * 7, 90);
-        onProgress(pct);
-      }, 700);
-    }
-
-    const res = await fetch(`${API_URL}/api/v1/render`, {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ ...req, model: req.model ?? "klein" }),
+    if (onProgress) interval = setInterval(() => { pct = Math.min(pct + Math.random()*7, 90); onProgress(pct); }, 700);
+    const response = await fetch(`${API_URL}/api/v1/render`, {
+      method: "POST", headers: headers(), body: JSON.stringify({ ...req, model: req.model ?? "klein" }),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000),
     });
-
-    if (interval) clearInterval(interval);
-    if (onProgress) onProgress(100);
-
-    if (!res.ok) return parseError(res);
-    return (await res.json()) as RenderResponse;
+    if (!response.ok) return parseError(response);
+    const result = await response.json() as RenderResponse;
+    if (!result.image || !["image/png", "image/jpeg"].includes(result.mime)) throw new Error("The service returned an invalid image.");
+    onProgress?.(100);
+    return result;
   } catch (e) {
-    return { kind: "generic", message: e instanceof Error ? e.message : "Network error" };
-  }
+    return { kind: "generic", message: signal?.aborted ? "Render cancelled." : e instanceof Error && e.name === "TimeoutError" ? "Rendering timed out. Please retry." : e instanceof Error ? e.message : "Could not reach the render service." };
+  } finally { if (interval) clearInterval(interval); }
 }
 
 export function isRenderError(r: RenderResponse | RenderError): r is RenderError {

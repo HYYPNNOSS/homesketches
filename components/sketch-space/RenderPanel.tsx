@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { apiRequest } from "../../lib/api";
+import { saveProject } from "../../lib/workspace-store";
 import {
   render as apiRender,
   previewPrompt,
@@ -13,21 +15,22 @@ import {
 import {
   RenderRequest,
   Scene,
+  Project,
   VirtualCamera,
   BUILTIN_MATERIALS,
   isValidScene,
 } from "./types";
-import { planFromPrompt } from "./templates";
 
 interface Props {
   sceneSummary: string;
   sceneData?: Scene | null;
-  onCapture: () => { top: string; persp: string };
+  onCapture: (cameraId?: string) => { top: string; persp: string };
+  onGetProject: () => Project;
+  onReorderCamera: (id: string, direction: number) => void;
   onExportGLB: () => Promise<void>;
   onExportSVG: () => void;
   onExportJSON: () => void;
-  onImportJSON?: (file: File) => void;
-  onStartWalkthrough: () => void;
+  onStartWalkthrough: (seconds?: number) => void;
   onStopWalkthrough: () => void;
   isRecording: boolean;
   onSendToFloorPlan: () => void;
@@ -58,16 +61,118 @@ function base64ToDataUrl(b64: string, mime: string): string {
   return `data:${mime};base64,${b64}`;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
+// ── Algorithmic Architectural Plan Generator (Feature F Fallback) ─────────────
+
+function generateAlgorithmicPlan(prompt: string): Scene {
+  const p = prompt.toLowerCase();
+  const is2Bed = p.includes("2 bed") || p.includes("two bed");
+  const isOffice = p.includes("office") || p.includes("workspace");
+
+  if (isOffice) {
+    return {
+      unit: "m",
+      canvas: { widthM: 14, depthM: 10, gridStep: 0.1 },
+      walls: [
+        { id: "w1", a: [0, 0], b: [14, 0] },
+        { id: "w2", a: [14, 0], b: [14, 10] },
+        { id: "w3", a: [14, 10], b: [0, 10] },
+        { id: "w4", a: [0, 10], b: [0, 0] },
+        { id: "w5", a: [7, 0], b: [7, 10] },
+      ],
+      rooms: [
+        { id: "r1", name: "Open Office", x: 0, z: 0, w: 7, d: 10, materialId: "polished-concrete" },
+        { id: "r2", name: "Conference Room", x: 7, z: 0, w: 7, d: 10, materialId: "cozy-carpet" },
+      ],
+      openings: [
+        { id: "o1", type: "door", at: [3.5, 0], w: 1.0, wallId: "w1" },
+        { id: "o2", type: "door", at: [7, 5], w: 0.9, wallId: "w5" },
+        { id: "o3", type: "window", at: [14, 5], w: 2.0, wallId: "w2" },
+      ],
+      items: [
+        { id: "i1", kind: "table", x: 3.5, z: 4, rot: 0 },
+        { id: "i2", kind: "chair", x: 3.5, z: 3.2, rot: 0 },
+        { id: "i3", kind: "table", x: 10.5, z: 5, rot: 0 },
+        { id: "i4", kind: "plant", x: 1, z: 1, rot: 0 },
+      ],
+    };
+  }
+
+  if (is2Bed) {
+    return {
+      unit: "m",
+      canvas: { widthM: 14, depthM: 10, gridStep: 0.1 },
+      walls: [
+        { id: "w1", a: [0, 0], b: [14, 0] },
+        { id: "w2", a: [14, 0], b: [14, 10] },
+        { id: "w3", a: [14, 10], b: [0, 10] },
+        { id: "w4", a: [0, 10], b: [0, 0] },
+        { id: "w5", a: [7, 0], b: [7, 10] },
+        { id: "w6", a: [7, 5], b: [14, 5] },
+      ],
+      rooms: [
+        { id: "r1", name: "Living & Kitchen", x: 0, z: 0, w: 7, d: 10, materialId: "oak-wood" },
+        { id: "r2", name: "Primary Bedroom", x: 7, z: 0, w: 7, d: 5, materialId: "cozy-carpet" },
+        { id: "r3", name: "Second Bedroom", x: 7, z: 5, w: 7, d: 5, materialId: "oak-wood" },
+      ],
+      openings: [
+        { id: "o1", type: "door", at: [3.5, 0], w: 0.9, wallId: "w1" },
+        { id: "o2", type: "door", at: [7, 2.5], w: 0.85, wallId: "w5" },
+        { id: "o3", type: "door", at: [7, 7.5], w: 0.85, wallId: "w5" },
+        { id: "o4", type: "window", at: [3.5, 10], w: 2.0, wallId: "w3" },
+        { id: "o5", type: "window", at: [14, 2.5], w: 1.5, wallId: "w2" },
+      ],
+      items: [
+        { id: "i1", kind: "sofa", x: 3.5, z: 7, rot: 0 },
+        { id: "i2", kind: "tv", x: 3.5, z: 9.5, rot: 0 },
+        { id: "i3", kind: "kitchen", x: 3.5, z: 1.5, rot: 0 },
+        { id: "i4", kind: "bed", x: 10.5, z: 2.5, rot: 0 },
+        { id: "i5", kind: "bed", x: 10.5, z: 7.5, rot: 0 },
+        { id: "i6", kind: "plant", x: 0.8, z: 8.5, rot: 0 },
+      ],
+    };
+  }
+
+  // 1-Bed Flat / Studio Default
+  return {
+    unit: "m",
+    canvas: { widthM: 10, depthM: 8, gridStep: 0.1 },
+    walls: [
+      { id: "w1", a: [0, 0], b: [10, 0] },
+      { id: "w2", a: [10, 0], b: [10, 8] },
+      { id: "w3", a: [10, 8], b: [0, 8] },
+      { id: "w4", a: [0, 8], b: [0, 0] },
+      { id: "w5", a: [5, 0], b: [5, 8] },
+    ],
+    rooms: [
+      { id: "r1", name: "Living Room", x: 0, z: 0, w: 5, d: 8, materialId: "oak-wood" },
+      { id: "r2", name: "Bedroom", x: 5, z: 0, w: 5, d: 8, materialId: "cozy-carpet" },
+    ],
+    openings: [
+      { id: "o1", type: "door", at: [2.5, 0], w: 0.9, wallId: "w1" },
+      { id: "o2", type: "door", at: [5, 4], w: 0.85, wallId: "w5" },
+      { id: "o3", type: "window", at: [2.5, 8], w: 1.6, wallId: "w3" },
+      { id: "o4", type: "window", at: [10, 4], w: 1.4, wallId: "w2" },
+    ],
+    items: [
+      { id: "i1", kind: "sofa", x: 2.5, z: 5, rot: 0 },
+      { id: "i2", kind: "bed", x: 7.5, z: 4, rot: 0 },
+      { id: "i3", kind: "wardrobe", x: 7.5, z: 1.5, rot: 0 },
+      { id: "i4", kind: "plant", x: 0.8, z: 6.8, rot: 0 },
+    ],
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function RenderPanel({
   sceneSummary,
   sceneData,
   onCapture,
+  onGetProject,
+  onReorderCamera,
   onExportGLB,
   onExportSVG,
   onExportJSON,
-  onImportJSON,
   onStartWalkthrough,
   onStopWalkthrough,
   isRecording,
@@ -94,6 +199,11 @@ export function RenderPanel({
   const [result, setResult] = useState<{ image: string; mime: string; model: string } | null>(null);
   const [refineImage, setRefineImage] = useState<string | null>(null);
   const [comparisonPct, setComparisonPct] = useState(50);
+  const [sourceImage, setSourceImage] = useState("");
+  const [cameraId, setCameraId] = useState("");
+  const [duration, setDuration] = useState(12);
+  const renderAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => renderAbort.current?.abort(), []);
   const [previewPromptText, setPreviewPromptText] = useState<string | null>(null);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [showRecent, setShowRecent] = useState(false);
@@ -111,62 +221,35 @@ export function RenderPanel({
   }, []);
 
   useEffect(() => {
-    if (sceneData?.rooms.length && !selectedRoomId) {
+    if (sceneData?.rooms.length && !sceneData.rooms.some(r => r.id === selectedRoomId)) {
       setSelectedRoomId(sceneData.rooms[0].id);
     }
   }, [sceneData, selectedRoomId]);
 
-  const sceneIsEmpty = !sceneData || (!sceneData.walls.length && !sceneData.rooms.length && !sceneData.items.length);
-
   async function handleRender() {
-    if (sceneIsEmpty) {
-      setStatus("error");
-      setError("Draw a room or load a starter plan first — there is nothing to render yet.");
-      return;
+    if (!sceneData || (!sceneData.walls.length && !sceneData.rooms.length && !sceneData.items.length)) { setError("Draw or load a layout before rendering."); return; }
+    setStatus("loading"); setError(""); setProgress(0); setPreviewPromptText(null);
+    const controller = new AbortController(); renderAbort.current?.abort(); renderAbort.current = controller;
+    try {
+      const { top, persp } = onCapture(cameraId || undefined);
+      const project = structuredClone(onGetProject());
+      const source = ["clean2d", "marker", "plan3d"].includes(look) ? top : persp;
+      setSourceImage(source);
+      const req: RenderRequest = { images: [dataUrlToApiImage(top), dataUrlToApiImage(persp)], plan: sceneSummary, look, style, light, notes: notes || undefined, aspect: "4:3", model: "klein" };
+      if (refineImage) req.images.push(dataUrlToApiImage(refineImage));
+      const response = await apiRender(req, pct => { if (!controller.signal.aborted) setProgress(pct); }, controller.signal);
+      if (controller.signal.aborted) { setStatus("idle"); return; }
+      if (isRenderError(response)) throw new Error(response.message);
+      setResult(response); setStatus("done");
+      const title = `${project.name ?? "Sketch"} · ${look} · ${style}`;
+      saveRecentProject({title,look,image:response.image,mime:response.mime,sceneSummary});
+      try {
+        await saveProject({ name:title,kind:"render",url:base64ToDataUrl(response.image,response.mime),sourceFiles:[],design:project,sourceImage:source,renderSettings:{look,style,light,notes,cameraId} });
+      } catch { setError("Render complete, but the archive could not be saved. Download it to keep a copy."); }
+      setRecentProjects(getRecentProjects());
+    } catch (e) {
+      if (!controller.signal.aborted) { setStatus("error"); setError(e instanceof Error ? e.message : "Rendering failed. Please retry."); }
     }
-    setStatus("loading");
-    setError("");
-    setProgress(0);
-    setPreviewPromptText(null);
-
-    const { top, persp } = onCapture();
-    const images = [dataUrlToApiImage(top), dataUrlToApiImage(persp)];
-
-    const req: RenderRequest = {
-      images,
-      plan: sceneSummary,
-      look,
-      style,
-      light,
-      notes: notes || undefined,
-      aspect: "4:3",
-      model: "klein",
-    };
-
-    if (refineImage) {
-      req.images.push(dataUrlToApiImage(refineImage));
-    }
-
-    const resp = await apiRender(req, (pct) => setProgress(pct));
-
-    if (isRenderError(resp)) {
-      setStatus("error");
-      setError(resp.message);
-      return;
-    }
-
-    setResult(resp);
-    setStatus("done");
-
-    const proj = {
-      title: `${look} · ${style}`,
-      look,
-      image: resp.image,
-      mime: resp.mime,
-      sceneSummary,
-    };
-    saveRecentProject(proj);
-    setRecentProjects(getRecentProjects());
   }
 
   async function handlePreviewPrompt() {
@@ -198,42 +281,26 @@ export function RenderPanel({
   async function handleGeneratePlan() {
     if (!aiPrompt.trim()) return;
     setAiGenStatus("generating");
-    setAiGenMsg("Designing architectural layout...");
+    setAiGenMsg("Preparing starter layout...");
 
     try {
       // Attempt backend endpoint first
       let plan: Scene | null = null;
-      let fallbackLabel = "";
       try {
-        const res = await fetch(`${API_URL}/text-to-sketch/plan`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: aiPrompt }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (isValidScene(data)) {
-            plan = data;
-          }
-        }
+        const data = await apiRequest<Scene>("/text-to-sketch/plan", { method: "POST", body: JSON.stringify({ prompt: aiPrompt }) });
+        if (isValidScene(data)) plan = data;
       } catch {
         // Backend not running, use built-in generator
       }
 
       if (!plan) {
-        const picked = planFromPrompt(aiPrompt);
-        plan = picked.scene;
-        fallbackLabel = picked.template.label;
+        plan = generateAlgorithmicPlan(aiPrompt);
       }
 
       if (plan && onLoadGeneratedPlan) {
         onLoadGeneratedPlan(plan);
         setAiGenStatus("done");
-        setAiGenMsg(
-          fallbackLabel
-            ? `The plan service is offline, so we loaded the closest starter plan (${fallbackLabel}). Edit it on the canvas, or press Ctrl+Z to go back.`
-            : `Plan loaded: ${plan.rooms.length} rooms, ${plan.walls.length} walls. Press Ctrl+Z to go back.`
-        );
+        setAiGenMsg(`Generated plan with ${plan.rooms.length} rooms and ${plan.walls.length} walls!`);
       }
     } catch (e) {
       setAiGenStatus("error");
@@ -245,6 +312,7 @@ export function RenderPanel({
   function handleCustomTextureUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !onApplyRoomMaterial || !selectedRoomId) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 5 * 1024 * 1024) { setError("Choose a PNG, JPG or WEBP texture smaller than 5MB."); return; }
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
@@ -361,6 +429,7 @@ export function RenderPanel({
               />
             </label>
 
+            <label className="sk-field-label">Render camera<select className="sk-select" aria-label="Render camera" value={cameraId} onChange={e => setCameraId(e.target.value)}><option value="">Current perspective</option>{sceneData?.virtualCameras?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
             {refineImage && (
               <div className="sk-refine-badge">
                 <span>⟳ Refining from previous result</span>
@@ -376,12 +445,12 @@ export function RenderPanel({
             )}
 
             {status === "loading" && (
-              <div className="sk-progress" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Render progress">
+              <div><button type="button" className="sk-preview-btn" onClick={() => { renderAbort.current?.abort(); setStatus("idle"); setError("Render cancelled."); }}>Cancel render</button><div className="sk-progress" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Render progress">
                 <div className="sk-progress-track">
                   <div className="sk-progress-fill" style={{ width: `${progress}%` }} />
                 </div>
-                <span className="sk-progress-label">{Math.round(progress)}% — rendering…</span>
-              </div>
+                <span className="sk-progress-label">Rendering…</span>
+              </div></div>
             )}
 
             {error && <p className="sk-error" role="alert">{error}</p>}
@@ -427,10 +496,10 @@ export function RenderPanel({
                 />
                 <div
                   className="sk-compare-overlay"
-                  style={{ width: `${100 - comparisonPct}%` }}
+                  style={{ width: "100%", clipPath: `inset(0 ${comparisonPct}% 0 0)`, backgroundImage: "none" }}
                   aria-hidden="true"
                 >
-                  <span className="sk-compare-label">Sketch</span>
+                  <img src={sourceImage} alt="Sketch captured for this render" style={{width:"100%",height:"100%",objectFit:"cover"}} /><span className="sk-compare-label">Source sketch</span>
                 </div>
                 <input
                   type="range"
@@ -460,11 +529,11 @@ export function RenderPanel({
       {activeTab === "ai-gen" && (
         <div className="sk-panel-section">
           <div className="sk-panel-heading">
-            <span className="sk-panel-eyebrow">Generative plan</span>
+            <span className="sk-panel-eyebrow">Layout starter</span>
             <h2 className="sk-panel-title">Text to Floor Plan</h2>
           </div>
           <p style={{ fontSize: "12px", color: "#a0a595", marginBottom: "8px" }}>
-            Describe your desired room layout in plain English. The AI generates structured 3D walls, rooms, doors, and furniture.
+            Start with a studio, two-bedroom flat, or office template. These layouts are selected from keywords; refine the geometry with the drawing tools.
           </p>
 
           <textarea
@@ -606,7 +675,7 @@ export function RenderPanel({
             </>
           ) : (
             <p style={{ fontSize: "12px", color: "#999" }}>
-              Draw a room with the Room tool (R) first, then pick its floor finish here — or select a room on the canvas to change it there.
+              Draw at least one room on the canvas using the Room tool (R) to apply floor textures.
             </p>
           )}
         </div>
@@ -667,6 +736,7 @@ export function RenderPanel({
                     />
                   </div>
 
+                  <div style={{display:"flex",gap:4,marginBottom:6}}><button type="button" className="sk-action-btn" aria-label={`Move ${cam.name} earlier`} onClick={() => onReorderCamera(cam.id,-1)}>↑ Earlier</button><button type="button" className="sk-action-btn" aria-label={`Move ${cam.name} later`} onClick={() => onReorderCamera(cam.id,1)}>↓ Later</button></div>
                   <div style={{ display: "flex", gap: "4px" }}>
                     {onSwitchCamera && (
                       <button
@@ -703,35 +773,22 @@ export function RenderPanel({
       {/* ── Export & External Workspace Handoffs ── */}
       <div className="sk-panel-section">
         <p className="sk-panel-eyebrow">Export</p>
+        <label className="sk-field-label">Walkthrough duration (seconds)<input type="number" min={3} max={120} value={duration} aria-label="Walkthrough duration" onChange={e => setDuration(Math.max(3,Math.min(120,+e.target.value || 12)))} /></label>
+        <p style={{fontSize:11,color:"#737b61"}}>{(sceneData?.virtualCameras?.length ?? 0) >= 2 ? "Follows saved cameras in the order shown in Cameras." : "Add two cameras for an interior path; otherwise records an orbit."}</p>
         <div className="sk-export-grid">
           <button type="button" className="sk-export-btn" onClick={onExportSVG} aria-label="Export vector SVG floor plan">
             <span className="sk-export-icon">⬡</span> SVG plan
           </button>
           <button type="button" className="sk-export-btn" onClick={onExportJSON} aria-label="Export project JSON">
-            <span className="sk-export-icon">{"{ }"}</span> Save JSON
+            <span className="sk-export-icon">{ }</span> JSON
           </button>
-          {onImportJSON && (
-            <label className="sk-export-btn" aria-label="Open a saved project JSON file">
-              <span className="sk-export-icon">↥</span> Open JSON
-              <input
-                type="file"
-                accept="application/json,.json"
-                hidden
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onImportJSON(file);
-                  e.target.value = "";
-                }}
-              />
-            </label>
-          )}
           <button type="button" className="sk-export-btn" onClick={onExportGLB} aria-label="Export scene as GLB 3D model">
             <span className="sk-export-icon">⬢</span> GLB
           </button>
           <button
             type="button"
             className={`sk-export-btn ${isRecording ? "sk-export-recording" : ""}`}
-            onClick={isRecording ? onStopWalkthrough : onStartWalkthrough}
+            onClick={isRecording ? onStopWalkthrough : () => onStartWalkthrough(duration)}
             aria-label={isRecording ? "Stop walkthrough recording" : "Record WebM walkthrough"}
             aria-pressed={isRecording}
           >
@@ -756,7 +813,7 @@ export function RenderPanel({
           <button
             type="button"
             className="sk-send-btn"
-            onClick={isRecording ? onStopWalkthrough : onStartWalkthrough}
+            onClick={isRecording ? onStopWalkthrough : () => onStartWalkthrough(duration)}
             aria-label="Send to video recording"
           >
             <span>Video</span>

@@ -1,85 +1,31 @@
-/**
- * Next.js App Router proxy for fal.ai.
- * The FAL_KEY env var is read server-side only — never sent to the browser.
- *
- * The fal client (1.x) uses the header "x-fal-target-url" to tell the proxy
- * which fal endpoint to forward to. This route forwards that request with
- * the secret key injected server-side.
- */
 import { NextRequest, NextResponse } from "next/server";
 
-const FAL_KEY = process.env.FAL_KEY ?? "";
-const FAL_BASE = "https://fal.run";
-const QUEUE_BASE = "https://queue.fal.run";
-const STORAGE_BASE = "https://storage.fal.ai";
-
-function falHeaders() {
-  return {
-    Authorization: `Key ${FAL_KEY}`,
-    "Content-Type": "application/json",
-  };
+const allowedHosts = new Set(["rest.fal.ai", "queue.fal.run", "fal.run"]);
+function failure(message: string, status: number) {
+  return NextResponse.json({ error: message, message, detail: message }, { status });
 }
-
 async function proxy(req: NextRequest): Promise<NextResponse> {
-  // The fal client sets x-fal-target-url to the full fal URL it wants to hit.
-  const targetUrl =
-    req.headers.get("x-fal-target-url") ??
-    req.headers.get("X-Fal-Target-Url");
-
-  if (!targetUrl) {
-    return NextResponse.json({ error: "Missing x-fal-target-url header" }, { status: 400 });
+  const target = req.headers.get("x-fal-target-url");
+  const key = process.env.FAL_KEY;
+  if (!target && req.method === "GET") return NextResponse.json({ configured: Boolean(key) }, { headers: { "Cache-Control": "no-store" } });
+  if (!target) return failure("Missing fal destination.", 400);
+  let url: URL;
+  try { url = new URL(target); } catch { return failure("Invalid fal destination.", 400); }
+  if (url.protocol !== "https:" || !allowedHosts.has(url.hostname) || url.port || url.username || url.password) return failure("This fal destination is not allowed.", 400);
+  if (!key) return failure("AI generation is not configured. Add FAL_KEY to sketchfront/.env.local and restart the app.", 503);
+  const headers = new Headers({ Authorization: `Key ${key}` });
+  req.headers.forEach((value, name) => {
+    if (["content-type", "accept"].includes(name) || (name.startsWith("x-fal-") && name !== "x-fal-target-url")) headers.set(name, value);
+  });
+  try {
+    const response = await fetch(url, {
+      method: req.method, headers, redirect: "error", cache: "no-store",
+      body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
+      signal: AbortSignal.timeout(120000),
+    });
+    return new NextResponse(response.body, { status: response.status, headers: { "Content-Type": response.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store" } });
+  } catch {
+    return failure("The generation service could not be reached. Please try again.", 502);
   }
-
-  // Build forwarded headers — drop the host and fal-target headers, add auth.
-  const forwardHeaders: Record<string, string> = {};
-  req.headers.forEach((value, key) => {
-    const lower = key.toLowerCase();
-    if (lower === "x-fal-target-url" || lower === "host") return;
-    forwardHeaders[key] = value;
-  });
-  
-  const isFalApi = targetUrl.startsWith("https://rest.fal.ai") || 
-                   targetUrl.startsWith("https://queue.fal.run") || 
-                   targetUrl.startsWith("https://fal.run");
-                   
-  if (isFalApi) {
-    forwardHeaders["Authorization"] = `Key ${FAL_KEY}`;
-  }
-
-  const body = req.method !== "GET" && req.method !== "HEAD"
-    ? await req.arrayBuffer()
-    : undefined;
-
-  const falRes = await fetch(targetUrl, {
-    method: req.method,
-    headers: forwardHeaders,
-    body,
-  });
-
-  const responseHeaders: Record<string, string> = {};
-  falRes.headers.forEach((value, key) => {
-    responseHeaders[key] = value;
-  });
-  // Allow the browser to read the response.
-  responseHeaders["Access-Control-Allow-Origin"] = "*";
-
-  return new NextResponse(falRes.body, {
-    status: falRes.status,
-    headers: responseHeaders,
-  });
 }
-
-export async function GET(req: NextRequest) { return proxy(req); }
-export async function POST(req: NextRequest) { return proxy(req); }
-export async function PUT(req: NextRequest) { return proxy(req); }
-export async function DELETE(req: NextRequest) { return proxy(req); }
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-fal-target-url",
-    },
-  });
-}
+export { proxy as GET, proxy as POST, proxy as PUT, proxy as DELETE };

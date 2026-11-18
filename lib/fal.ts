@@ -46,16 +46,16 @@ export { fal };
 
 export const FAL_MODELS = {
   /** Image → cinematic video clip */
-  video: "fal-ai/kling-video/v1.6/standard/image-to-video",
+  video: "fal-ai/kling-video/v3/standard/image-to-video",
 
   /** Image → textured GLB 3D model */
-  "3d": "fal-ai/triposr",
+  "3d": "fal-ai/trellis",
 
   /** Image → clean architectural floor plan render */
-  "floor-plan": "fal-ai/flux/schnell",
+  "floor-plan": "fal-ai/flux/dev/image-to-image",
 
   /** Image(s) → walkthrough video */
-  walkthrough: "fal-ai/luma-dream-machine",
+  walkthrough: "fal-ai/kling-video/v3/standard/image-to-video",
 } as const;
 
 export type FalModel = (typeof FAL_MODELS)[keyof typeof FAL_MODELS];

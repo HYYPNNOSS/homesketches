@@ -24,7 +24,7 @@ interface Props {
   activeFloorId?: string;
   gizmoMode?: GizmoMode;
   onTool: (t: ToolKind) => void;
-  onView?: (v: ViewMode) => void;
+  onView: (v: ViewMode) => void;
   onFurniture: (f: FurnitureKind) => void;
   onOrthogonalLock: (v: boolean) => void;
   onUndo: () => void;
@@ -39,9 +39,10 @@ interface Props {
 }
 
 const TOOLS: { kind: ToolKind; label: string; icon: string; shortcut: string }[] = [
+  { kind: "box-select", label: "Box select", icon: "▧", shortcut: "B" },
   { kind: "select", label: "Select", icon: "↖", shortcut: "V" },
   { kind: "wall", label: "Wall", icon: "┐", shortcut: "W" },
-  { kind: "room", label: "Room rect", icon: "□", shortcut: "R" },
+  { kind: "room", label: "Enclosed room", icon: "□", shortcut: "R" },
   { kind: "door", label: "Door", icon: "⌐", shortcut: "D" },
   { kind: "window", label: "Window", icon: "⊡", shortcut: "N" },
   { kind: "furniture", label: "Furniture", icon: "⊞", shortcut: "F" },
@@ -53,6 +54,12 @@ const TOOLS: { kind: ToolKind; label: string; icon: string; shortcut: string }[]
 const FURNITURE_LIST: FurnitureKind[] = [
   "bed", "sofa", "table", "kitchen", "toilet", "bath", "stairs",
   "plant", "tv", "rug", "chair", "wardrobe"
+];
+
+const VIEWS: { mode: ViewMode; label: string; icon: string }[] = [
+  { mode: "top", label: "Top-down", icon: "⊙" },
+  { mode: "perspective", label: "Perspective", icon: "⧫" },
+  { mode: "eye-level", label: "Eye level", icon: "◎" },
 ];
 
 const CANVAS_PRESETS: { label: string; width: number; depth: number }[] = [
@@ -116,7 +123,6 @@ export function SketchToolbar({
   };
 
   return (
-    <div className="sk-toolbar-wrap">
     <div className="sk-toolbar" role="toolbar" aria-label="Drawing tools">
       {/* ── Multi-floor level tabs (Feature E) ── */}
       {floors.length > 0 && onSelectFloor && (
@@ -204,9 +210,31 @@ export function SketchToolbar({
 
       {floors.length > 0 && <div className="sk-toolbar-divider" aria-hidden="true" />}
 
+      {/* ── View modes ── */}
+      <div className="sk-toolbar-section">
+        <span className="sk-toolbar-label">View</span>
+        <div className="sk-toolbar-group">
+          {VIEWS.map((v) => (
+            <button
+              key={v.mode}
+              type="button"
+              className={`sk-tool-btn ${activeView === v.mode ? "active" : ""}`}
+              title={v.label}
+              aria-label={v.label}
+              aria-pressed={activeView === v.mode}
+              onClick={() => onView(v.mode)}
+            >
+              <span className="sk-tool-icon">{v.icon}</span>
+              <span className="sk-tool-name">{v.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* ── 3D Gizmo Controls (Feature B2) ── */}
       {activeView !== "top" && onGizmoModeChange && (
         <>
+          <div className="sk-toolbar-divider" aria-hidden="true" />
           <div className="sk-toolbar-section">
             <span className="sk-toolbar-label">3D Gizmo</span>
             <div className="sk-toolbar-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "2px" }}>
@@ -245,10 +273,9 @@ export function SketchToolbar({
         </>
       )}
 
-      {activeView !== "top" && <div className="sk-toolbar-divider" aria-hidden="true" />}
+      <div className="sk-toolbar-divider" aria-hidden="true" />
 
-      {/* ── Drawing tools (plan view only) ── */}
-      {activeView === "top" ? (
+      {/* ── Drawing tools ── */}
       <div className="sk-toolbar-section">
         <span className="sk-toolbar-label">Draw</span>
         <div className="sk-toolbar-group">
@@ -269,13 +296,68 @@ export function SketchToolbar({
           ))}
         </div>
       </div>
-      ) : (
-      <div className="sk-toolbar-section">
-        <span className="sk-toolbar-label">Draw</span>
-        <button type="button" className="sk-edit-2d" onClick={() => onView?.("top")}>
-          ✎ Edit in the 2D plan <kbd className="sk-shortcut">1</kbd>
-        </button>
-      </div>
+
+      {/* ── Furniture sub-picker ── */}
+      {activeTool === "furniture" && (
+        <>
+          <div className="sk-toolbar-divider" aria-hidden="true" />
+          <div className="sk-toolbar-section">
+            <span className="sk-toolbar-label">Furniture</span>
+            <div className="sk-toolbar-group sk-furniture-group">
+              {FURNITURE_LIST.map((kind) => {
+                const [w, d] = FURNITURE_SIZES[kind];
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`sk-tool-btn sk-furn-btn ${activeFurniture === kind ? "active" : ""}`}
+                    aria-label={`${kind} ${w}×${d}m`}
+                    aria-pressed={activeFurniture === kind}
+                    onClick={() => onFurniture(kind)}
+                  >
+                    <span className="sk-tool-name">{kind}</span>
+                    <span className="sk-furn-size">{w}×{d}m</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Wall options ── */}
+      {activeTool === "wall" && (
+        <>
+          <div className="sk-toolbar-divider" aria-hidden="true" />
+          <div className="sk-toolbar-section">
+            <span className="sk-toolbar-label">Wall options</span>
+            <label className="sk-ortho-label">
+              <input
+                type="checkbox"
+                checked={orthogonalLock}
+                onChange={(e) => onOrthogonalLock(e.target.checked)}
+                aria-label="Orthogonal lock — hold Shift for temporary"
+              />
+              <span>Orthogonal lock</span>
+              <kbd className="sk-shortcut">⇧</kbd>
+            </label>
+            <label className="sk-len-label">
+              Length (m)
+              <input
+                type="number"
+                className="sk-len-input"
+                placeholder="auto"
+                min="0.1"
+                step="0.1"
+                aria-label="Typed wall length in metres"
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  onLengthInput(isNaN(v) || v <= 0 ? null : v);
+                }}
+              />
+            </label>
+          </div>
+        </>
       )}
 
       {/* ── Canvas Bounds settings (Feature A.6) ── */}
@@ -396,63 +478,6 @@ export function SketchToolbar({
       {isRecording && (
         <div className="sk-recording-badge" aria-live="polite">
           <span className="sk-rec-dot" /> REC
-        </div>
-      )}
-    </div>
-
-      {/* Tool options float over the canvas so the canvas never jumps when the tool changes */}
-      {activeView === "top" && activeTool === "furniture" && (
-        <div className="sk-tool-options" role="group" aria-label="Furniture to place">
-          <span className="sk-toolbar-label">Furniture</span>
-          <div className="sk-furniture-group">
-            {FURNITURE_LIST.map((kind) => {
-              const [w, d] = FURNITURE_SIZES[kind];
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  className={`sk-tool-btn sk-furn-btn ${activeFurniture === kind ? "active" : ""}`}
-                  aria-label={`${kind} ${w}×${d}m`}
-                  aria-pressed={activeFurniture === kind}
-                  onClick={() => onFurniture(kind)}
-                >
-                  <span className="sk-tool-name">{kind}</span>
-                  <span className="sk-furn-size">{w}×{d}m</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {activeView === "top" && activeTool === "wall" && (
-        <div className="sk-tool-options" role="group" aria-label="Wall options">
-          <span className="sk-toolbar-label">Wall options</span>
-          <label className="sk-ortho-label">
-            <input
-              type="checkbox"
-              checked={orthogonalLock}
-              onChange={(e) => onOrthogonalLock(e.target.checked)}
-              aria-label="Straight walls only — hold Shift for temporary"
-            />
-            <span>Straight walls only</span>
-            <kbd className="sk-shortcut">⇧</kbd>
-          </label>
-          <label className="sk-len-label">
-            Exact length (m)
-            <input
-              type="number"
-              className="sk-len-input"
-              placeholder="auto"
-              min="0.1"
-              step="0.1"
-              aria-label="Typed wall length in metres"
-              onChange={(e) => {
-                const v = parseFloat(e.target.value);
-                onLengthInput(isNaN(v) || v <= 0 ? null : v);
-              }}
-            />
-          </label>
         </div>
       )}
     </div>

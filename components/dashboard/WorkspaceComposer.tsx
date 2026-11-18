@@ -1,6 +1,6 @@
 "use client";
 
-import { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useRef, useState } from "react";
+import { ClipboardEvent, DragEvent, FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
   Direction,
   ImageInput,
@@ -10,6 +10,7 @@ import {
   renderDirection,
   toDataUrl,
 } from "../../lib/roomwright";
+import { assetFile, getAsset, saveProject } from "../../lib/workspace-store";
 import { PickedImage, fileToImageInput } from "../../lib/media";
 
 const suggestions = ["Turn my sketch into a walkthrough", "Create a warm minimal render", "Clean up this floor plan"];
@@ -33,7 +34,7 @@ function friendly(e: unknown): string {
     if (e.kind === "rate") return "Please wait a moment and try again.";
     return e.message;
   }
-  return "Something went wrong. Please try again.";
+  return e instanceof Error ? "The render service could not complete the request. Check your connection and try again." : "Something went wrong. Please try again.";
 }
 
 export function WorkspaceComposer({ onSubmit, onResult }: Props) {
@@ -45,6 +46,17 @@ export function WorkspaceComposer({ onSubmit, onResult }: Props) {
   const [result, setResult] = useState<RenderResult | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const id = new URLSearchParams(window.location.search).get("asset");
+    if (id) getAsset(id).then(async asset => {
+      if (!asset) throw new Error("This reference is no longer in your asset library.");
+      const image = await fileToImageInput(assetFile(asset));
+      if (active) setImages([image]);
+    }).catch(e => { if (active) setNote(e.message); });
+    return () => { active = false; };
+  }, []);
 
   async function addFiles(list: Iterable<File>) {
     const files = Array.from(list);
@@ -73,9 +85,8 @@ export function WorkspaceComposer({ onSubmit, onResult }: Props) {
       try {
         direction = await getDirection(value);
       } catch {
-        setNote("Couldn't reach the design service, so we continued without it.");
-        onSubmit?.(value, undefined, inputs);
-        return;
+        direction = { intent: "render", needsSketch: false, prompt: value, look: look === "auto" ? "room" : look };
+        setNote("Using your description directly to create the render.");
       }
       onSubmit?.(value, direction, inputs);
 
@@ -93,6 +104,11 @@ export function WorkspaceComposer({ onSubmit, onResult }: Props) {
       setResult(res);
       if (walkthrough) setNote("Video walkthroughs aren't available yet — here is a still render of your space instead.");
       onResult?.(res, direction, inputs);
+      try {
+        await saveProject({ name: value.slice(0, 80), kind: "render", url: toDataUrl(res), sourceFiles: [] });
+      } catch {
+        setNote("Render complete, but it could not be saved in this browser. Download it to keep a copy.");
+      }
     } catch (e) {
       setNote(friendly(e));
     } finally {

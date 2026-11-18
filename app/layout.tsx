@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const viewport: import("next").Viewport = {
-  width: 1400,
-  initialScale: undefined,
+  width: "device-width",
+  initialScale: 1,
 };
 
 export const metadata: Metadata = {

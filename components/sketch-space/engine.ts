@@ -4,11 +4,15 @@
  * All operations are in metres. Y = up. X/Z = floor plane.
  */
 import * as THREE from "three";
+import { allObjects, hitObject, objectsInBox, expandSelection, clampMovement, translateObjects, copyObjects, pasteObjects, type SelectedObject } from "./selection";
+import { normalizeProject, parseProject, sceneBounds, validateScene, moveJunction } from "./project-data";
+import { workspaceOwner } from "../../lib/workspace-store";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import {
   Scene,
+  TraceReference,
   Wall,
   Room,
   Opening,
@@ -200,7 +204,6 @@ const COLORS = {
   wallTop: 0x2e3128,
   wallSide: 0x3d4234,
   wallEdge: 0x1e2019,
-  wall3d: 0xe9e6dc,
   floor: 0xf2f0e6,
   furniture: 0x8a9a6a,
   furnitureEdge: 0x5a6a3a,
@@ -223,11 +226,18 @@ export type EngineEventType =
   | "tool-change"
   | "view-change"
   | "history-change"
-  | "selection-change";
+  | "selection-change"
+  | "save-status"
+  | "viewport-change"
+  | "cursor-change"
+  | "interaction-error"
+  | "calibration-change";
 
 type Listener = (data?: unknown) => void;
 
 export interface SelectionChangeData {
+  objects?: SelectedObject[];
+  canPaste?: boolean;
   id: string | null;
   type: "item" | "wall" | "opening" | "camera" | "room" | null;
   screenX: number;
@@ -243,13 +253,16 @@ export class SketchEngine {
   private perspCamera: THREE.PerspectiveCamera;
   private controls: OrbitControls | null = null;
   private frameId = 0;
-  private sun: THREE.DirectionalLight | null = null;
+  private tweenFrame = 0;
+  private walkthroughFrame = 0;
+  private destroyed = false;
+  private lastTick = performance.now();
   private listeners: Map<EngineEventType, Set<Listener>> = new Map();
 
   // Drawing state
   private sceneData: Scene = emptyScene();
   private projectData: Project = emptyProject();
-  private history: Scene[] = [];
+  private history: Project[] = [];
   private historyIndex = -1;
   private MAX_HISTORY = 60;
 
@@ -277,9 +290,15 @@ export class SketchEngine {
   private ghostDim: THREE.Sprite | null = null;
   private roomStart: Vec2 | null = null;
   private selectedId: string | null = null;
-  private selectedType: "item" | "wall" | "opening" | "camera" | "camera-target" | "room" | null = null;
-  // First point of the wall chain being drawn — clicking it again closes the loop
-  private chainOrigin: Vec2 | null = null;
+  private selectedType: "item" | "wall" | "opening" | "camera" | "room" | "camera-target" | null = null;
+  private selectedObjects: SelectedObject[] = [];
+  private selectionIds = new Set<string>();
+  private calibration: {points: Vec2[]} | null = null;
+  private clipboard: Scene | null = null;
+  private pasteCount = 0;
+  private groupDrag: {origin: Vec2; scene: Scene; objects: SelectedObject[]} | null = null;
+  private marqueeStart: Vec2 | null = null;
+  private marqueeAdditive = false;
   private isDragging = false;
   private dragOffset: Vec2 = [0, 0];
   private lengthOverride: number | null = null; // metres, typed by user
@@ -292,6 +311,8 @@ export class SketchEngine {
   private snapGuideGroup = new THREE.Group();
 
   // 3D groups
+  private referenceGroup = new THREE.Group();
+  private calibrationGroup = new THREE.Group();
   private wallGroup = new THREE.Group();
   private floorSlabGroup = new THREE.Group();
   private roomGroup = new THREE.Group();
@@ -312,6 +333,7 @@ export class SketchEngine {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.projectData.id = nanoid();
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({
@@ -345,6 +367,8 @@ export class SketchEngine {
     // Groups
     this.scene3d.add(
       this.gridGroup,
+      this.referenceGroup,
+      this.calibrationGroup,
       this.floorSlabGroup,
       this.roomGroup,
       this.wallGroup,
@@ -361,15 +385,6 @@ export class SketchEngine {
     const sun = new THREE.DirectionalLight(0xfff8ec, 1.2);
     sun.position.set(10, 20, 8);
     sun.castShadow = true;
-    // Cover a whole house, not just the default 10 m box, so shadows are not cut off
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -40;
-    sun.shadow.camera.right = 40;
-    sun.shadow.camera.top = 40;
-    sun.shadow.camera.bottom = -40;
-    sun.shadow.camera.far = 120;
-    sun.shadow.bias = -0.0005;
-    this.sun = sun;
     this.scene3d.add(ambient, sun);
 
     // Grid
@@ -404,30 +419,45 @@ export class SketchEngine {
     // Load autosave
     this.loadAutosave();
 
-    // Top view needs its own pan controls from the first frame, framed on the plan
-    this.setView("top");
-    this.fitView(false);
-
     // Start loop
+    this.setView("top");
+    this.fitToPlan();
     this.tick();
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
   destroy() {
+    this.destroyed = true;
+    this.stopWalkthrough();
+    cancelAnimationFrame(this.walkthroughFrame);
+    cancelAnimationFrame(this.tweenFrame);
     cancelAnimationFrame(this.frameId);
     if (this.transformControls) {
-      // Detach before removing helper — avoids internal this.traverse() crash
-      // that occurs in Three.js 0.169 when TransformControls is no longer an Object3D.
+      // Three.js r169's dispose() calls traverse() on the Controls instance,
+      // but only its Object3D helper has traverse(). Release both explicitly.
       this.transformControls.detach();
+      this.transformControls.disconnect();
       if (this.transformControlsHelper) {
+        this.transformControlsHelper.traverse((child) => {
+          const mesh = child as THREE.Mesh;
+          mesh.geometry?.dispose();
+          if (mesh.material) {
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            materials.forEach((material) => material.dispose());
+          }
+        });
         this.scene3d.remove(this.transformControlsHelper);
         this.transformControlsHelper = null;
       }
-      this.transformControls.dispose();
       this.transformControls = null;
     }
+    this.controls?.dispose();
+    this.releaseGroup(this.scene3d);
+    this.textureCache.forEach(texture => texture.dispose());
+    this.textureCache.clear();
     this.renderer.dispose();
+    this.listeners.clear();
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
@@ -456,10 +486,12 @@ export class SketchEngine {
   private tick = () => {
     this.frameId = requestAnimationFrame(this.tick);
 
+    const delta = Math.min((performance.now() - this.lastTick) / 1000, .05);
+    this.lastTick = performance.now();
     // Apply eye-level manual movement
     if (this.activeView === "eye-level" && this.controls) {
-      const speed = 0.15;
-      const rotSpeed = 0.03;
+      const speed = 9 * delta;
+      const rotSpeed = 1.8 * delta;
       const fwd = new THREE.Vector3();
       const right = new THREE.Vector3();
 
@@ -500,7 +532,7 @@ export class SketchEngine {
       }
     }
 
-    this.controls?.update();
+    if (!this.isRecording) this.controls?.update();
     this.renderer.render(this.scene3d, this.camera);
   };
 
@@ -516,7 +548,7 @@ export class SketchEngine {
     this.renderer.setSize(w, h, false);
     const aspect = w / h;
 
-    const half = 10 / this.orthoCamera.zoom;
+    const half = 10;
     this.orthoCamera.left = -half * aspect;
     this.orthoCamera.right = half * aspect;
     this.orthoCamera.top = half;
@@ -525,6 +557,7 @@ export class SketchEngine {
 
     this.perspCamera.aspect = aspect;
     this.perspCamera.updateProjectionMatrix();
+    this.emit("viewport-change", this.viewportInfo());
   };
 
   // ─── Grid ────────────────────────────────────────────────────────────────────
@@ -622,6 +655,11 @@ export class SketchEngine {
 
   /** Update canvas bounds, rebuild grid, propagate to all floors, and emit scene-change. */
   setCanvasBounds(b: CanvasBounds) {
+    if (![b.widthM,b.depthM,b.gridStep].every(Number.isFinite) || b.widthM < 2 || b.depthM < 2 || b.gridStep <= 0) throw new Error("Enter valid positive canvas dimensions.");
+    for (const floor of this.getProject().floors) {
+      const bounds=sceneBounds(floor.scene);
+      if (bounds && (bounds.minX < -b.widthM/2 || bounds.maxX > b.widthM/2 || bounds.minZ < -b.depthM/2 || bounds.maxZ > b.depthM/2)) throw new Error("These bounds would exclude part of your design. Choose a larger canvas.");
+    }
     this.sceneData = { ...this.sceneData, canvas: b };
     for (const fl of this.projectData.floors) {
       fl.scene = { ...fl.scene, canvas: { ...b } };
@@ -654,21 +692,27 @@ export class SketchEngine {
 
   /** Smoothly tween the active perspective camera from one position to another (ease-out cubic). */
   private tweenCamera(fromPos: THREE.Vector3, toPos: THREE.Vector3, fromTarget: THREE.Vector3, toTarget: THREE.Vector3, duration = 300) {
+    cancelAnimationFrame(this.tweenFrame);
     const start = performance.now();
     const animate = () => {
+      if (this.destroyed) return;
       const t = Math.min(1, (performance.now() - start) / duration);
       const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
       this.perspCamera.position.lerpVectors(fromPos, toPos, eased);
       if (this.controls) {
         this.controls.target.lerpVectors(fromTarget, toTarget, eased);
       }
-      if (t < 1) requestAnimationFrame(animate);
+      if (t < 1) this.tweenFrame = requestAnimationFrame(animate);
     };
-    requestAnimationFrame(animate);
+    this.tweenFrame = requestAnimationFrame(animate);
   }
 
   setView(mode: ViewMode) {
+    cancelAnimationFrame(this.tweenFrame);
     const prevMode = this.activeView;
+    const previousTarget = this.controls?.target.clone() ?? new THREE.Vector3();
+    this.controls?.dispose();
+    this.controls = null;
     this.activeView = mode;
 
     // B-2: Hide the gizmo helper in top-down view — it's camera-relative to perspCamera
@@ -683,8 +727,9 @@ export class SketchEngine {
 
     if (mode === "top") {
       this.camera = this.orthoCamera;
+      this.orthoCamera.position.set(0, 20, 0);
+      this.orthoCamera.lookAt(0, 0, 0);
       this.scene3d.background = new THREE.Color(0xf5f4ef);
-      this.controls?.dispose();
       this.controls = new OrbitControls(this.orthoCamera, this.canvas);
       this.controls.listenToKeyEvents(window); // Allow arrow keys to pan
       this.controls.enableRotate = false;
@@ -705,22 +750,23 @@ export class SketchEngine {
     } else if (mode === "perspective") {
       this.camera = this.perspCamera;
       const fromPos = this.perspCamera.position.clone();
-      const fromTarget = prevMode === "top" ? new THREE.Vector3(0, 0, 0) : this.controls?.target.clone() ?? new THREE.Vector3(0, 0, 0);
-      const { pos: toPos, target: toTarget } = this.perspectiveFraming();
+      const toPos = new THREE.Vector3(8, 8, 12);
+      const fromTarget = previousTarget;
+      const toTarget = new THREE.Vector3(0, 0, 0);
       this.scene3d.background = new THREE.Color(0xd8e4f0);
       this.setupControls();
       if (prevMode !== "perspective") {
         this.tweenCamera(fromPos, toPos, fromTarget, toTarget);
       } else {
         this.perspCamera.position.copy(toPos);
-        this.controls?.target.copy(toTarget);
       }
     } else {
       // eye-level
       this.camera = this.perspCamera;
       const fromPos = this.perspCamera.position.clone();
-      const fromTarget = prevMode === "top" ? new THREE.Vector3(0, EYE_LEVEL, 0) : this.controls?.target.clone() ?? new THREE.Vector3(0, EYE_LEVEL, 0);
-      const { pos: toPos, target: toTarget } = this.eyeLevelFraming();
+      const toPos = new THREE.Vector3(0, EYE_LEVEL, 6);
+      const fromTarget = previousTarget;
+      const toTarget = new THREE.Vector3(0, EYE_LEVEL, 0);
       this.scene3d.background = new THREE.Color(0xd8e4f0);
       this.setupControls();
       if (prevMode !== "eye-level") {
@@ -733,129 +779,95 @@ export class SketchEngine {
     if (prevMode !== mode) {
       this.rebuildScene();
     }
-    if (mode === "top") {
-      // Keep the user's pan/zoom: aim the new controls straight down from where the camera already is
-      const { x, z } = this.orthoCamera.position;
-      this.orthoCamera.position.set(x, 20, z);
-      this.orthoCamera.lookAt(x, 0, z);
-      this.controls?.target.set(x, 0, z);
-    }
-    // A flat plan reads best without cast shadows; keep them for the 3D views
-    if (this.sun) this.sun.castShadow = mode !== "top";
-    this.updateCursor();
     this.emit("view-change", mode);
   }
 
-  // ─── Framing / zoom ──────────────────────────────────────────────────────────
-
-  /** Bounding box of everything drawn on the active floor, or the sheet when empty. */
-  getContentBounds(): { minX: number; minZ: number; maxX: number; maxZ: number; empty: boolean } {
-    const s = this.sceneData;
-    const pts: Vec2[] = [];
-    for (const w of s.walls) pts.push(w.a, w.b);
-    for (const r of s.rooms) pts.push([r.x, r.z], [r.x + r.w, r.z + r.d]);
-    for (const it of s.items) pts.push([it.x, it.z]);
-    if (!pts.length) {
-      const cb = this.getCanvasBounds();
-      return { minX: -cb.widthM / 2, minZ: -cb.depthM / 2, maxX: cb.widthM / 2, maxZ: cb.depthM / 2, empty: true };
-    }
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-    for (const [x, z] of pts) {
-      minX = Math.min(minX, x); minZ = Math.min(minZ, z);
-      maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z);
-    }
-    return { minX, minZ, maxX, maxZ, empty: false };
+  private rebuildReference() {
+    this.releaseGroup(this.referenceGroup);
+    const ref=this.sceneData.reference;
+    this.referenceGroup.visible=this.activeView==="top" && !!ref?.visible && !this.isRecording;
+    this.calibrationGroup.visible=this.activeView==="top" && !this.isRecording;
+    if(!ref)return;
+    const texture=this.getOrCreateTexture(ref.dataUrl,"trace"); texture.repeat.set(1,1);
+    const material=new THREE.MeshBasicMaterial({map:texture,transparent:true,opacity:ref.opacity,depthWrite:false});
+    const image=new THREE.Mesh(new THREE.PlaneGeometry(ref.widthM,ref.depthM),material);
+    image.rotation.x=-Math.PI/2;
+    const elevation=this.getFloors().find(f=>f.id===this.getActiveFloorId())?.elevationM??0;
+    image.position.set(ref.center[0],elevation+.035,ref.center[1]);image.name="locked-trace-reference";
+    this.referenceGroup.add(image);
   }
 
-  private activeElevation(): number {
-    return this.projectData.floors.find((f) => f.id === this.projectData.activeFloorId)?.elevationM ?? 0;
+  setReference(reference: TraceReference | undefined) {
+    const candidate={...this.sceneData,reference};
+    if(!validateScene(candidate))throw new Error("The reference image or its dimensions are invalid.");
+    const bounds=sceneBounds(candidate),canvas=this.getCanvasBounds();
+    const widthM=Math.max(canvas.widthM,bounds?2*Math.max(Math.abs(bounds.minX),Math.abs(bounds.maxX)):0);
+    const depthM=Math.max(canvas.depthM,bounds?2*Math.max(Math.abs(bounds.minZ),Math.abs(bounds.maxZ)):0);
+    if(widthM>1000||depthM>1000)throw new Error("This scale would exceed the 1000m canvas limit. Check the measurement.");
+    this.sceneData={...candidate,canvas:{...canvas,widthM,depthM}};
+    this.pushHistory();this.buildGrid(this.sceneData.canvas);this.rebuildScene();this.emit("scene-change",this.sceneData);
   }
 
-  private perspectiveFraming(): { pos: THREE.Vector3; target: THREE.Vector3 } {
-    const b = this.getContentBounds();
-    const y = this.activeElevation();
-    const cx = (b.minX + b.maxX) / 2;
-    const cz = (b.minZ + b.maxZ) / 2;
-    const size = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 4);
-    const d = size * 0.95 + 3;
-    return {
-      pos: new THREE.Vector3(cx + d * 0.55, y + d * 0.7, cz + d * 0.8),
-      target: new THREE.Vector3(cx, y + 0.6, cz),
-    };
+  startCalibration() {
+    if(!this.sceneData.reference?.visible)throw new Error("Show a reference image before calibrating it.");
+    this.setView("top");this.setTool("select");this.setSelection([]);
+    this.calibration={points:[]};this.emit("calibration-change",[]);
   }
 
-  private eyeLevelFraming(): { pos: THREE.Vector3; target: THREE.Vector3 } {
-    const y = this.activeElevation() + EYE_LEVEL;
-    // Start inside the largest room, looking down its long side
-    const room = [...this.sceneData.rooms].sort((a, b) => b.w * b.d - a.w * a.d)[0];
-    if (room) {
-      const cx = room.x + room.w / 2;
-      const cz = room.z + room.d / 2;
-      if (room.w >= room.d) {
-        const px = room.x + Math.min(room.w * 0.2, 1.2);
-        return { pos: new THREE.Vector3(px, y, cz), target: new THREE.Vector3(px + 1.5, y, cz) };
-      }
-      const pz = room.z + room.d - Math.min(room.d * 0.2, 1.2);
-      return { pos: new THREE.Vector3(cx, y, pz), target: new THREE.Vector3(cx, y, pz - 1.5) };
-    }
-    const b = this.getContentBounds();
-    const cx = (b.minX + b.maxX) / 2;
-    const cz = (b.minZ + b.maxZ) / 2;
-    const standZ = b.empty ? cz + 4 : b.maxZ + 3;
-    return { pos: new THREE.Vector3(cx, y, standZ), target: new THREE.Vector3(cx, y, standZ - 1.5) };
+  cancelCalibration() { this.calibration=null;this.releaseGroup(this.calibrationGroup);this.emit("calibration-change",null); }
+
+  private pickCalibration(point: Vec2) {
+    const reference=this.sceneData.reference;
+    if(!reference||!this.calibration)return;
+    if(Math.abs(point[0]-reference.center[0])>reference.widthM/2 || Math.abs(point[1]-reference.center[1])>reference.depthM/2){this.emit("interaction-error","Pick a point inside the reference image.");return;}
+    if(this.calibration.points.length===2)this.calibration.points=[];
+    if(this.calibration.points.length&&dist(point,this.calibration.points[0])<.01){this.emit("interaction-error","Choose two different points.");return;}
+    this.calibration.points.push(point);
+    this.releaseGroup(this.calibrationGroup);
+    const elevation=this.getFloors().find(f=>f.id===this.getActiveFloorId())?.elevationM??0;
+    for(const p of this.calibration.points){const dot=new THREE.Mesh(new THREE.SphereGeometry(.1,12,8),new THREE.MeshBasicMaterial({color:0x3b82f6,depthTest:false}));dot.position.set(p[0],elevation+.1,p[1]);dot.renderOrder=1000;this.calibrationGroup.add(dot);}
+    if(this.calibration.points.length===2){const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(this.calibration.points.map(p=>new THREE.Vector3(p[0],elevation+.1,p[1]))),new THREE.LineBasicMaterial({color:0x3b82f6,depthTest:false}));line.renderOrder=1000;this.calibrationGroup.add(line);}
+    this.emit("calibration-change",[...this.calibration.points]);
   }
 
-  /** Frame the whole plan in the current view. */
-  fitView(animate = true) {
+  applyCalibration(metres: number) {
+    const ref=this.sceneData.reference,points=this.calibration?.points;
+    if(!ref||!points||points.length!==2||!Number.isFinite(metres)||metres<=0)throw new Error("Pick two points and enter their real distance in metres.");
+    const ratio=metres/dist(points[0],points[1]),anchor=points[0];
+    this.setReference({...ref,widthM:ref.widthM*ratio,depthM:ref.depthM*ratio,center:[anchor[0]+(ref.center[0]-anchor[0])*ratio,anchor[1]+(ref.center[1]-anchor[1])*ratio],calibrated:true});
+    this.cancelCalibration();this.fitToPlan();
+  }
+
+  viewportInfo() {
+    const width = this.canvas.clientWidth || 1;
+    const metres = (this.orthoCamera.right - this.orthoCamera.left) / this.orthoCamera.zoom;
+    return { zoom: Math.round(this.orthoCamera.zoom * 100), metresPerPixel: metres / width };
+  }
+
+  fitToPlan() {
+    cancelAnimationFrame(this.tweenFrame);
+    const bounds = sceneBounds(this.sceneData);
+    const cb = this.getCanvasBounds();
+    const minX = bounds?.minX ?? -cb.widthM / 2, maxX = bounds?.maxX ?? cb.widthM / 2;
+    const minZ = bounds?.minZ ?? -cb.depthM / 2, maxZ = bounds?.maxZ ?? cb.depthM / 2;
+    const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+    const elevation = this.getFloors().find(f => f.id === this.getActiveFloorId())?.elevationM ?? 0;
+    const aspect = (this.canvas.clientWidth || 1) / (this.canvas.clientHeight || 1);
     if (this.activeView === "top") {
-      const b = this.getContentBounds();
-      const cx = (b.minX + b.maxX) / 2;
-      const cz = (b.minZ + b.maxZ) / 2;
-      const w = this.canvas.clientWidth || 1;
-      const h = this.canvas.clientHeight || 1;
-      const aspect = w / h;
-      const margin = b.empty ? 1.08 : 1.35;
-      const half = Math.max(((b.maxZ - b.minZ) / 2) * margin, ((b.maxX - b.minX) / 2 / aspect) * margin, 2);
-      // Visible half-height is 10 / zoom² (see onResize + three's own zoom division)
-      this.orthoCamera.zoom = Math.max(0.5, Math.min(20, Math.sqrt(10 / half)));
-      this.orthoCamera.position.set(cx, 20, cz);
-      this.orthoCamera.lookAt(cx, 0, cz);
-      this.controls?.target.set(cx, 0, cz);
-      this.onResize();
-      return;
-    }
-    const { pos, target } = this.activeView === "perspective" ? this.perspectiveFraming() : this.eyeLevelFraming();
-    if (animate) {
-      this.tweenCamera(this.perspCamera.position.clone(), pos, this.controls?.target.clone() ?? target.clone(), target);
+      this.orthoCamera.zoom = Math.max(.05, Math.min(20, Math.min(20 * aspect / Math.max(maxX-minX, 1), 20 / Math.max(maxZ-minZ, 1)) / 1.25));
+      this.orthoCamera.position.set(cx, elevation + 20, cz);
+      this.orthoCamera.lookAt(cx, elevation, cz);
+      this.controls?.target.set(cx, elevation, cz);
     } else {
-      this.perspCamera.position.copy(pos);
-      this.controls?.target.copy(target);
+      const size = Math.max(maxX-minX, maxZ-minZ, 4);
+      this.perspCamera.position.set(cx + size, elevation + size * .8, cz + size);
+      this.controls?.target.set(cx, elevation + 1, cz);
+      this.perspCamera.lookAt(cx, elevation + 1, cz);
     }
+    this.controls?.update(); this.onResize();
   }
 
-  /** Zoom in (factor > 1) or out (factor < 1) in whichever view is active. */
-  zoomBy(factor: number) {
-    if (this.activeView === "top") {
-      // zoom is applied twice (frustum + projection), so take the root to keep steps even
-      this.orthoCamera.zoom = Math.max(0.5, Math.min(20, this.orthoCamera.zoom * Math.sqrt(factor)));
-      this.onResize();
-      return;
-    }
-    if (!this.controls) return;
-    const offset = new THREE.Vector3().subVectors(this.perspCamera.position, this.controls.target);
-    const len = Math.max(0.5, Math.min(120, offset.length() / factor));
-    offset.setLength(len);
-    this.perspCamera.position.copy(this.controls.target).add(offset);
-  }
-
-  private updateCursor() {
-    if (this.activeView !== "top") {
-      this.canvas.style.cursor = "grab";
-      return;
-    }
-    const map: Partial<Record<ToolKind, string>> = { select: "default", eraser: "not-allowed", furniture: "copy", label: "text" };
-    this.canvas.style.cursor = map[this.activeTool] ?? "crosshair";
-  }
+  resetView() { this.setView("top"); this.fitToPlan(); }
 
   // ─── Input binding ───────────────────────────────────────────────────────────
 
@@ -887,7 +899,7 @@ export class SketchEngine {
     let snapped: Vec2 = snapVec(v);
 
     // Clear old snap guides
-    this.snapGuideGroup.clear();
+    this.releaseGroup(this.snapGuideGroup);
 
     const MAGNETIC_R = 0.3; // metres
 
@@ -937,15 +949,19 @@ export class SketchEngine {
     if (this.activeView !== "top") return; // tools only in top view
     if (e.button !== 0) return;
     if (this.spacePressed) return; // Let OrbitControls handle panning
+    this.canvas.focus({preventScroll:true});
     e.preventDefault();
+    if(this.calibration){this.pickCalibration(worldToFloor(e,this.camera,this.canvas,this.raycaster));return;}
+    this.canvas.setPointerCapture(e.pointerId);
     const pos = this.getFloorPos(e, true);
     this.handleToolDown(pos, e);
   };
 
   private onPointerMove = (e: PointerEvent) => {
     if (this.activeView !== "top") return;
-    if (!this.drawing && !this.isDragging && !this.draggingWallId) return;
-    const pos = this.getFloorPos(e, true);
+    this.emit("cursor-change", worldToFloor(e, this.camera, this.canvas, this.raycaster));
+    if (!this.drawing && !this.isDragging && !this.draggingWallId && !this.groupDrag && !this.marqueeStart) return;
+    const pos = this.getFloorPos(e, !this.groupDrag && !this.marqueeStart);
     this.handleToolMove(pos, e.shiftKey);
   };
 
@@ -954,6 +970,7 @@ export class SketchEngine {
     if (e.button !== 0) return;
     const pos = this.getFloorPos(e, true);
     this.handleToolUp(pos, e.shiftKey);
+    if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
   };
 
   private onWheel = (e: WheelEvent) => {
@@ -978,14 +995,17 @@ export class SketchEngine {
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
-    const t = e.target;
-    if (
-      t instanceof HTMLInputElement ||
-      t instanceof HTMLTextAreaElement ||
-      t instanceof HTMLSelectElement ||
-      (t instanceof HTMLElement && t.isContentEditable)
-    ) return;
-
+    if (e.target instanceof HTMLElement && (e.target.closest("input, textarea, select, [contenteditable=true]"))) return;
+    
+    const command = e.ctrlKey || e.metaKey;
+    if (command && ["a","c","v","d"].includes(e.key.toLowerCase()) && this.canvas === document.activeElement) {
+      e.preventDefault();
+      if(e.key.toLowerCase()==="a") this.setSelection(allObjects(this.sceneData));
+      if(e.key.toLowerCase()==="c") this.copySelection();
+      if(e.key.toLowerCase()==="v") this.pasteSelection();
+      if(e.key.toLowerCase()==="d") this.duplicateSelection();
+      return;
+    }
     this.keysPressed.add(e.code);
 
     if (this.activeView === "eye-level" && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) {
@@ -1001,58 +1021,31 @@ export class SketchEngine {
       }
       return;
     }
-
-    const key = e.key.toLowerCase();
-    const mod = e.ctrlKey || e.metaKey;
-
-    if (mod && key === "z") {
+    if ((e.ctrlKey || e.metaKey) && e.key === "z") {
       e.preventDefault();
       if (e.shiftKey) this.redo(); else this.undo();
-      return;
     }
-    if (mod && key === "y") {
-      e.preventDefault();
-      this.redo();
-      return;
-    }
-    if (mod && key === "d") {
-      e.preventDefault();
-      this.duplicateSelected();
-      return;
-    }
-    if (mod || e.altKey) return;
-
-    if (e.key === "Escape" || e.key === "Enter") {
-      this.cancelTool();
-      return;
+    if (e.key === "Escape") {
+      this.cancelTool(); this.setSelection([]);
     }
     if (e.key === "Delete" || e.key === "Backspace") {
       this.deleteSelected();
-      return;
     }
-
-    // View shortcuts: 1 = plan, 2 = 3D, 3 = walk, 0 = fit
-    if (key === "1") return this.setView("top");
-    if (key === "2") return this.setView("perspective");
-    if (key === "3") return this.setView("eye-level");
-    if (key === "0") return this.fitView();
-    if (key === "+" || key === "=") return this.zoomBy(1.25);
-    if (key === "-") return this.zoomBy(0.8);
-
-    // In walk mode W/A/S/D/Q/E move the camera, so they must not switch tools
+    // Navigation keys do not also activate drawing tools.
     if (this.activeView === "eye-level") return;
-
-    // R rotates the selected furniture; otherwise it picks the room tool
-    if (key === "r" && this.activeTool === "select" && this.selectedType === "item") {
-      this.rotateSelected();
-      return;
-    }
-
+    // Tool shortcuts
     const shortcuts: Record<string, ToolKind> = {
-      w: "wall", r: "room", d: "door", n: "window", f: "furniture",
+      b: "box-select", w: "wall", r: "room", d: "door", n: "window", f: "furniture",
       l: "label", e: "eraser", v: "select", c: "camera",
     };
-    if (shortcuts[key]) this.setTool(shortcuts[key]);
+    if (!e.ctrlKey && !e.metaKey && shortcuts[e.key] && !(e.key === "r" && this.activeTool === "select")) {
+      this.setTool(shortcuts[e.key]);
+    }
+    
+    // Rotate furniture — only when select tool is active to avoid conflict with "R" → room shortcut (B-7)
+    if ((e.key === "r" || e.key === "R") && this.activeTool === "select") {
+      this.rotateSelected();
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
@@ -1071,16 +1064,7 @@ export class SketchEngine {
 
   setTool(tool: ToolKind) {
     this.cancelTool();
-    const hadSelection = this.selectedId !== null;
-    if (tool !== "select" && hadSelection) {
-      this.selectedId = null;
-      this.selectedType = null;
-    }
-    const handlesChanged = (this.activeTool === "select") !== (tool === "select");
     this.activeTool = tool;
-    this.updateCursor();
-    // Endpoint handles and selection outlines depend on the tool
-    if (handlesChanged || hadSelection) this.rebuildScene();
     this.emit("tool-change", tool);
   }
 
@@ -1097,15 +1081,17 @@ export class SketchEngine {
   }
 
   private cancelTool() {
+    if(this.calibration) this.cancelCalibration();
     this.drawing = false;
     this.wallStart = null;
-    this.chainOrigin = null;
     this.roomStart = null;
     this.cameraStart = null;
+    if (this.groupDrag) { this.sceneData = this.groupDrag.scene; this.rebuildScene(); }
+    this.groupDrag = null; this.marqueeStart = null;
     this.isDragging = false;
     this.draggingWallId = null;
     this.draggingEndpoint = null;
-    this.snapGuideGroup.clear();
+    this.releaseGroup(this.snapGuideGroup);
     this.clearGhost();
   }
 
@@ -1115,20 +1101,10 @@ export class SketchEngine {
         if (!this.drawing) {
           this.drawing = true;
           this.wallStart = pos;
-          this.chainOrigin = pos;
         } else {
-          // Each click adds a wall and chains the next one from its end
-          const origin = this.chainOrigin;
+          // Second click finalises wall
           const end = this.commitWall(this.wallStart!, pos);
-          if (!end) {
-            // Clicked the same spot again (double-click) — finish the chain
-            this.cancelTool();
-          } else if (origin && dist(end, origin) < 0.05) {
-            // Back at the first point — the outline is closed
-            this.cancelTool();
-          } else {
-            this.wallStart = end;
-          }
+          if (end) this.wallStart = end; // chain next wall from here
         }
         break;
       case "room":
@@ -1163,6 +1139,9 @@ export class SketchEngine {
       case "eraser":
         this.eraseAt(pos);
         break;
+      case "box-select":
+        this.marqueeStart = pos; this.marqueeAdditive = e.shiftKey; this.drawing = true;
+        break;
       case "select":
         this.selectAt(pos, e);
         break;
@@ -1170,6 +1149,13 @@ export class SketchEngine {
   }
 
   private handleToolMove(pos: Vec2, shiftKey: boolean) {
+    if(this.marqueeStart) { this.showRoomGhost(this.marqueeStart,pos); return; }
+    if(this.groupDrag) {
+      const drag=this.groupDrag;
+      try { this.sceneData=translateObjects(drag.scene,drag.objects,clampMovement(drag.scene,drag.objects,[pos[0]-drag.origin[0],pos[1]-drag.origin[1]])); this.rebuildScene(); }
+      catch(e) { this.emit("interaction-error",e instanceof Error?e.message:"Could not move selection."); }
+      return;
+    }
     // Wall endpoint drag
     if (this.draggingWallId && this.draggingEndpoint) {
       this.dragWallEndpoint(pos);
@@ -1184,11 +1170,6 @@ export class SketchEngine {
         this.dragCameraTarget(pos);
         return;
       }
-      if (this.selectedType === "room") {
-        this.dragRoom(pos);
-        return;
-      }
-      if (this.selectedType !== "item") return;
       this.dragItem(pos);
       return;
     }
@@ -1204,6 +1185,12 @@ export class SketchEngine {
   }
 
   private handleToolUp(pos: Vec2, _shiftKey: boolean) {
+    if(this.marqueeStart) {
+      const objects=objectsInBox(this.sceneData,this.marqueeStart,pos);
+      const next=this.marqueeAdditive?[...this.selectedObjects,...objects]:objects;
+      this.marqueeStart=null;this.drawing=false;this.clearGhost();this.setTool("select");this.setSelection(next);return;
+    }
+    if(this.groupDrag) { this.groupDrag=null;this.pushHistory();this.emit("scene-change",this.sceneData);return; }
     if (this.draggingWallId) {
       this.draggingWallId = null;
       this.draggingEndpoint = null;
@@ -1222,16 +1209,10 @@ export class SketchEngine {
     }
     if (this.isDragging) {
       this.isDragging = false;
-      // A plain click (no movement) should not add an undo step
-      if (this.dragMoved) {
-        this.pushHistory();
-        this.emit("scene-change", this.sceneData);
-      }
-      this.dragMoved = false;
+      this.pushHistory();
+      this.emit("scene-change", this.sceneData);
     }
   }
-
-  private dragMoved = false;
 
   // ─── Tool commits ────────────────────────────────────────────────────────────
 
@@ -1268,21 +1249,14 @@ export class SketchEngine {
     const w = Math.abs(clampedB[0] - clampedA[0]);
     const d = Math.abs(clampedB[1] - clampedA[1]);
     if (w < 0.2 || d < 0.2) return;
-    const room: Room = { id: nanoid(), name: `Room ${this.sceneData.rooms.length + 1}`, x, z, w, d };
-    // A room is enclosed by walls so it reads as a real space in 3D.
-    // Edges that already have a wall (e.g. shared with a neighbouring room) are skipped.
-    const corners: Vec2[] = [[x, z], [x + w, z], [x + w, z + d], [x, z + d]];
-    const newWalls: Wall[] = [];
+    const room: Room = { id: nanoid(), name: "Room", x, z, w, d };
+    const corners: Vec2[] = [[x,z],[x+w,z],[x+w,z+d],[x,z+d]];
+    const walls = [...this.sceneData.walls];
     for (let i = 0; i < 4; i++) {
-      const p = corners[i];
-      const q = corners[(i + 1) % 4];
-      if (!this.hasWallCovering(p, q)) newWalls.push({ id: nanoid(), a: p, b: q });
+      const a = corners[i], b = corners[(i+1)%4];
+      if (!walls.some(wall => (dist(wall.a,a)<.001 && dist(wall.b,b)<.001) || (dist(wall.a,b)<.001 && dist(wall.b,a)<.001))) walls.push({id:nanoid(), a,b});
     }
-    this.sceneData = {
-      ...this.sceneData,
-      rooms: [...this.sceneData.rooms, room],
-      walls: [...this.sceneData.walls, ...newWalls],
-    };
+    this.sceneData = { ...this.sceneData, walls, rooms: [...this.sceneData.rooms, room] };
     this.clearGhost();
     this.pushHistory();
     this.rebuildScene();
@@ -1333,74 +1307,23 @@ export class SketchEngine {
     this.emit("scene-change", this.sceneData);
   }
 
-  /** True when an existing wall already runs along the whole segment p→q. */
-  private hasWallCovering(p: Vec2, q: Vec2): boolean {
-    const EPS = 0.06;
-    const distToWall = (pt: Vec2, wall: Wall) => {
-      const dx = wall.b[0] - wall.a[0];
-      const dz = wall.b[1] - wall.a[1];
-      const l2 = dx * dx + dz * dz;
-      if (l2 === 0) return dist(pt, wall.a);
-      const t = Math.max(0, Math.min(1, ((pt[0] - wall.a[0]) * dx + (pt[1] - wall.a[1]) * dz) / l2));
-      return Math.hypot(pt[0] - (wall.a[0] + t * dx), pt[1] - (wall.a[1] + t * dz));
-    };
-    return this.sceneData.walls.some((wall) => distToWall(p, wall) < EPS && distToWall(q, wall) < EPS);
-  }
-
-  private itemAt(pos: Vec2): Item | undefined {
-    // Topmost (last drawn) first; labels and tiny items get a generous hit radius
-    for (let i = this.sceneData.items.length - 1; i >= 0; i--) {
-      const it = this.sceneData.items[i];
-      const [w, d] = FURNITURE_SIZES[it.kind];
-      const sc = it.scale ?? 1;
-      const dx = pos[0] - it.x;
-      const dz = pos[1] - it.z;
-      // Into the item's local frame
-      const c = Math.cos(it.rot);
-      const sn = Math.sin(it.rot);
-      const lx = dx * c - dz * sn;
-      const lz = dx * sn + dz * c;
-      const hw = Math.max((w * sc) / 2, 0.35);
-      const hd = Math.max((d * sc) / 2, 0.35);
-      if (Math.abs(lx) <= hw && Math.abs(lz) <= hd) return it;
-    }
-    return undefined;
-  }
-
-  private roomAt(pos: Vec2): Room | undefined {
-    for (let i = this.sceneData.rooms.length - 1; i >= 0; i--) {
-      const r = this.sceneData.rooms[i];
-      if (pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.z && pos[1] <= r.z + r.d) return r;
-    }
-    return undefined;
-  }
-
-  /** Erase only the single topmost thing under the cursor. */
   private eraseAt(pos: Vec2) {
-    const s = this.sceneData;
-    const item = this.itemAt(pos);
-    const opening = item ? undefined : s.openings.find((o) => dist(pos, o.at) < 0.45);
-    const wall = item || opening ? null : this.nearestWall(pos, 0.3);
-    const cam = item || opening || wall ? undefined : s.virtualCameras?.find((c) => dist(pos, c.position) < 0.5);
-    const room = item || opening || wall || cam ? undefined : this.roomAt(pos);
-
-    if (item) {
-      this.sceneData = { ...s, items: s.items.filter((it) => it.id !== item.id) };
-    } else if (opening) {
-      this.sceneData = { ...s, openings: s.openings.filter((o) => o.id !== opening.id) };
-    } else if (wall) {
-      this.sceneData = {
-        ...s,
-        walls: s.walls.filter((w) => w.id !== wall.id),
-        openings: s.openings.filter((o) => o.wallId !== wall.id),
-      };
-    } else if (cam) {
-      this.sceneData = { ...s, virtualCameras: (s.virtualCameras ?? []).filter((c) => c.id !== cam.id) };
-    } else if (room) {
-      this.sceneData = { ...s, rooms: s.rooms.filter((r) => r.id !== room.id) };
-    } else {
-      return;
-    }
+    const thr = 0.5;
+    const snap = (a: Vec2, b: Vec2) => {
+      const dx = a[0] - b[0];
+      const dz = a[1] - b[1];
+      return Math.sqrt(dx * dx + dz * dz);
+    };
+    const walls = this.sceneData.walls.filter((w) => {
+      const mid = wallMid(w);
+      return snap(pos, mid) > thr;
+    });
+    const rooms = this.sceneData.rooms.filter((r) => {
+      return !(pos[0] >= r.x && pos[0] <= r.x + r.w && pos[1] >= r.z && pos[1] <= r.z + r.d);
+    });
+    const items = this.sceneData.items.filter((it) => snap(pos, [it.x, it.z]) > thr);
+    const openings = this.sceneData.openings.filter((o) => snap(pos, o.at) > thr);
+    this.sceneData = { ...this.sceneData, walls, rooms, items, openings };
     this.pushHistory();
     this.rebuildScene();
     this.emit("scene-change", this.sceneData);
@@ -1409,144 +1332,73 @@ export class SketchEngine {
   private lastPointerEvent: { clientX: number; clientY: number } = { clientX: 0, clientY: 0 };
 
   private selectAt(pos: Vec2, e: PointerEvent) {
-    this.lastPointerEvent = { clientX: e.clientX, clientY: e.clientY };
-    // Check wall endpoints first (wall endpoint dragging)
-    const EP = 0.25;
-    for (const wall of this.sceneData.walls) {
-      if (dist(pos, wall.a) < EP) {
-        this.draggingWallId = wall.id;
-        this.draggingEndpoint = "a";
-        return;
-      }
-      if (dist(pos, wall.b) < EP) {
-        this.draggingWallId = wall.id;
-        this.draggingEndpoint = "b";
-        return;
-      }
-    }
-
-    // Cameras: check target handle first, then camera body
-    const camTarget = this.sceneData.virtualCameras?.find((c) => dist(pos, c.targetPosition) < 0.5);
-    if (camTarget) {
-      this.selectedId = camTarget.id;
-      this.selectedType = "camera-target";
-      this.isDragging = true;
-      this.dragMoved = false;
-      this.dragOffset = [pos[0] - camTarget.targetPosition[0], pos[1] - camTarget.targetPosition[1]];
-      this.rebuildScene();
-      this.emit("selection-change", {
-        id: camTarget.id,
-        type: "camera",
-        screenX: e.clientX,
-        screenY: e.clientY,
-      } satisfies SelectionChangeData);
+    this.lastPointerEvent = {clientX:e.clientX, clientY:e.clientY};
+    const hit=hitObject(this.sceneData,pos);
+    if(e.shiftKey) {
+      if(hit) this.setSelection(this.selectedObjects.some(o=>o.id===hit.id)?this.selectedObjects.filter(o=>o.id!==hit.id):[...this.selectedObjects,hit],e);
       return;
     }
-
-    const cam = this.sceneData.virtualCameras?.find((c) => dist(pos, c.position) < 0.7);
-    if (cam) {
-      this.selectedId = cam.id;
-      this.selectedType = "camera";
-      this.isDragging = true;
-      this.dragMoved = false;
-      this.dragOffset = [pos[0] - cam.position[0], pos[1] - cam.position[1]];
-      this.rebuildScene();
-      this.emit("selection-change", {
-        id: cam.id,
-        type: "camera",
-        screenX: e.clientX,
-        screenY: e.clientY,
-      } satisfies SelectionChangeData);
-      return;
+    if(hit && this.selectedObjects.length>1 && this.effectiveSelection().some(o=>o.id===hit.id)) {
+      this.groupDrag={origin:pos,scene:structuredClone(this.sceneData),objects:this.effectiveSelection()};return;
     }
-
-    const select = (id: string, type: "item" | "wall" | "opening" | "room") => {
-      this.selectedId = id;
-      this.selectedType = type;
-      this.rebuildScene();
-      this.emit("selection-change", {
-        id,
-        type,
-        screenX: e.clientX,
-        screenY: e.clientY,
-      } satisfies SelectionChangeData);
-    };
-
-    // Furniture and labels (by footprint)
-    const item = this.itemAt(pos);
-    if (item) {
-      this.isDragging = true;
-      this.dragMoved = false;
-      this.dragOffset = [pos[0] - item.x, pos[1] - item.z];
-      select(item.id, "item");
-      return;
+    // Junction handles retain their connected-wall editing behavior for a single selection.
+    for(const wall of this.sceneData.walls) for(const endpoint of ["a","b"] as const) {
+      if(dist(pos,wall[endpoint])<.25) { this.setSelection([{id:wall.id,type:"wall"}],e);this.draggingWallId=wall.id;this.draggingEndpoint=endpoint;return; }
     }
-
-    // Doors and windows sit on walls, so test them before the wall itself
-    const opening = this.sceneData.openings.find((o) => dist(pos, o.at) < Math.max(0.35, o.w / 2));
-    if (opening) {
-      select(opening.id, "opening");
-      return;
+    const target=this.sceneData.virtualCameras?.find(c=>dist(pos,c.targetPosition)<.3);
+    if(target && (!hit || hit.type==="room")) {
+      this.setSelection([{id:target.id,type:"camera"}],e);this.selectedType="camera-target";this.isDragging=true;this.dragOffset=[pos[0]-target.targetPosition[0],pos[1]-target.targetPosition[1]];return;
     }
-
-    // Walls — anywhere along their length
-    const wall = this.nearestWall(pos, 0.3);
-    if (wall) {
-      select(wall.id, "wall");
-      return;
+    if(!hit) { this.setSelection([]);this.marqueeStart=pos;this.marqueeAdditive=false;this.drawing=true;return; }
+    this.setSelection([hit],e);
+    if(hit.type==="item" || hit.type==="wall" || hit.type==="room" || hit.type==="opening") {
+      this.groupDrag={origin:pos,scene:structuredClone(this.sceneData),objects:this.effectiveSelection()};
+    } else {
+      const camera=this.sceneData.virtualCameras?.find(c=>c.id===hit.id);
+      if(camera) { this.isDragging=true;this.dragOffset=[pos[0]-camera.position[0],pos[1]-camera.position[1]]; }
     }
-
-    // Rooms — click inside the floor area; drag to move
-    const room = this.roomAt(pos);
-    if (room) {
-      this.isDragging = true;
-      this.dragMoved = false;
-      this.dragOffset = [pos[0] - room.x, pos[1] - room.z];
-      select(room.id, "room");
-      return;
-    }
-
-    this.selectedId = null;
-    this.selectedType = null;
-    this.rebuildScene();
-    this.emit("selection-change", { id: null, type: null, screenX: e.clientX, screenY: e.clientY });
   }
 
-  private dragRoom(pos: Vec2) {
-    if (!this.selectedId) return;
-    const room = this.sceneData.rooms.find((r) => r.id === this.selectedId);
-    if (!room) return;
-    const cb = this.getCanvasBounds();
-    const nx = Math.max(-cb.widthM / 2, Math.min(cb.widthM / 2 - room.w, snap(pos[0] - this.dragOffset[0])));
-    const nz = Math.max(-cb.depthM / 2, Math.min(cb.depthM / 2 - room.d, snap(pos[1] - this.dragOffset[1])));
-    const dx = nx - room.x;
-    const dz = nz - room.z;
-    if (Math.abs(dx) < 1e-6 && Math.abs(dz) < 1e-6) return;
-    this.dragMoved = true;
-    // Walls, openings and furniture that belong to the room travel with it
-    const EPS = 0.06;
-    const inside = (p: Vec2) =>
-      p[0] >= room.x - EPS && p[0] <= room.x + room.w + EPS && p[1] >= room.z - EPS && p[1] <= room.z + room.d + EPS;
-    const movedWalls = new Set<string>();
-    const walls = this.sceneData.walls.map((w) => {
-      if (!inside(w.a) || !inside(w.b)) return w;
-      movedWalls.add(w.id);
-      return { ...w, a: [w.a[0] + dx, w.a[1] + dz] as Vec2, b: [w.b[0] + dx, w.b[1] + dz] as Vec2 };
-    });
-    const openings = this.sceneData.openings.map((o) =>
-      o.wallId && movedWalls.has(o.wallId) ? { ...o, at: [o.at[0] + dx, o.at[1] + dz] as Vec2 } : o
-    );
-    const items = this.sceneData.items.map((it) =>
-      inside([it.x, it.z]) ? { ...it, x: it.x + dx, z: it.z + dz } : it
-    );
-    const rooms = this.sceneData.rooms.map((r) => (r.id === room.id ? { ...r, x: nx, z: nz } : r));
-    this.sceneData = { ...this.sceneData, walls, openings, items, rooms };
-    this.rebuildScene();
+  private effectiveSelection(): SelectedObject[] {
+    return expandSelection(this.sceneData,this.selectedObjects);
+  }
+
+  private isSelected(id: string): boolean { return this.selectionIds.has(id); }
+
+  setSelection(objects: SelectedObject[], event?: {clientX:number;clientY:number}) {
+    this.selectedObjects=[...new Map(objects.map(o=>[o.id,o])).values()];
+    const primary=this.selectedObjects.at(-1);
+    this.selectedId=primary?.id??null;this.selectedType=primary?.type??null;
+    this.rebuildScene();this.notifySelection(event);
+  }
+
+  private notifySelection(event?: {clientX:number;clientY:number}) {
+    this.emit("selection-change",{id:this.selectedObjects.length===1?this.selectedId:null,type:this.selectedObjects.length===1?this.selectedType:null,objects:[...this.selectedObjects],canPaste:!!this.clipboard,screenX:event?.clientX??0,screenY:event?.clientY??0});
+  }
+
+  copySelection() {
+    if(!this.selectedObjects.length)return;
+    this.clipboard=copyObjects(this.sceneData,this.selectedObjects);this.pasteCount=0;this.notifySelection();
+  }
+
+  pasteSelection() {
+    if(!this.clipboard)return;
+    try {
+      const result=pasteObjects(this.sceneData,this.clipboard,[.5*(this.pasteCount+1),.5*(this.pasteCount+1)]);
+      this.pasteCount++;this.sceneData=result.scene;this.pushHistory();this.setSelection(result.selected);this.emit("scene-change",this.sceneData);
+    }catch(e){this.emit("interaction-error",e instanceof Error?e.message:"Could not paste objects.");}
+  }
+
+  duplicateSelection() { this.copySelection();this.pasteSelection(); }
+
+  moveSelection(dx: number, dz: number) {
+    if(!Number.isFinite(dx)||!Number.isFinite(dz))return;
+    try {const objects=this.effectiveSelection();this.sceneData=translateObjects(this.sceneData,objects,clampMovement(this.sceneData,objects,[dx,dz]));this.pushHistory();this.rebuildScene();this.emit("scene-change",this.sceneData);}
+    catch(e){this.emit("interaction-error",e instanceof Error?e.message:"Could not move objects.");}
   }
 
   private dragItem(pos: Vec2) {
     if (!this.selectedId) return;
-    this.dragMoved = true;
     const clamped = this.clampToBounds([pos[0] - this.dragOffset[0], pos[1] - this.dragOffset[1]]);
     const items = this.sceneData.items.map((it) =>
       it.id === this.selectedId
@@ -1559,7 +1411,6 @@ export class SketchEngine {
 
   private dragCamera(pos: Vec2) {
     if (!this.selectedId) return;
-    this.dragMoved = true;
     const newPos = this.clampToBounds([pos[0] - this.dragOffset[0], pos[1] - this.dragOffset[1]]);
     const currentCam = this.sceneData.virtualCameras?.find((c) => c.id === this.selectedId);
     if (!currentCam) return;
@@ -1579,7 +1430,6 @@ export class SketchEngine {
 
   private dragCameraTarget(pos: Vec2) {
     if (!this.selectedId) return;
-    this.dragMoved = true;
     const newTarget = this.clampToBounds([pos[0] - this.dragOffset[0], pos[1] - this.dragOffset[1]]);
     const cameras = (this.sceneData.virtualCameras ?? []).map((c) =>
       c.id === this.selectedId ? { ...c, targetPosition: newTarget } : c
@@ -1593,30 +1443,12 @@ export class SketchEngine {
   private dragWallEndpoint(pos: Vec2) {
     if (!this.draggingWallId || !this.draggingEndpoint) return;
     const clamped = this.clampToBounds(pos);
-    const walls = this.sceneData.walls.map((w) => {
-      if (w.id !== this.draggingWallId) return w;
-      return this.draggingEndpoint === "a" ? { ...w, a: clamped } : { ...w, b: clamped };
-    });
-    this.sceneData = { ...this.sceneData, walls };
+    this.sceneData = moveJunction(this.sceneData, this.draggingWallId, this.draggingEndpoint, clamped);
     this.rebuildScene();
-  }
-
-  /** Copy the selected furniture item next to itself and select the copy. */
-  duplicateSelected() {
-    if (!this.selectedId || this.selectedType !== "item") return;
-    const src = this.sceneData.items.find((it) => it.id === this.selectedId);
-    if (!src) return;
-    const [nx, nz] = this.clampToBounds([src.x + 0.5, src.z + 0.5]);
-    const copy: Item = { ...src, id: nanoid(), x: nx, z: nz };
-    this.sceneData = { ...this.sceneData, items: [...this.sceneData.items, copy] };
-    this.selectedId = copy.id;
-    this.pushHistory();
-    this.rebuildScene();
-    this.emit("scene-change", this.sceneData);
   }
 
   rotateSelected() {
-    if (!this.selectedId || this.selectedType !== "item") return;
+    if (!this.selectedId) return;
     const items = this.sceneData.items.map((it) => {
       if (it.id === this.selectedId) {
         return { ...it, rot: it.rot + Math.PI / 4 }; // Rotate by 45 degrees
@@ -1630,22 +1462,11 @@ export class SketchEngine {
   }
 
   deleteSelected() {
-    if (!this.selectedId) return;
-    this.sceneData = {
-      ...this.sceneData,
-      walls: this.sceneData.walls.filter((w) => w.id !== this.selectedId),
-      rooms: this.sceneData.rooms.filter((r) => r.id !== this.selectedId),
-      items: this.sceneData.items.filter((it) => it.id !== this.selectedId),
-      // Doors and windows go with the wall they were cut into
-      openings: this.sceneData.openings.filter((o) => o.id !== this.selectedId && o.wallId !== this.selectedId),
-      virtualCameras: (this.sceneData.virtualCameras ?? []).filter((c) => c.id !== this.selectedId),
-    };
-    this.selectedId = null;
-    this.selectedType = null;
-    this.pushHistory();
-    this.rebuildScene();
-    this.emit("scene-change", this.sceneData);
-    this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
+    const selected=this.selectedObjects.length?this.selectedObjects:this.selectedId?[{id:this.selectedId,type:this.selectedType as SelectedObject["type"]}]:[];
+    if(!selected.length)return;
+    const ids=new Set(expandSelection(this.sceneData,selected,false).map(o=>o.id));
+    this.sceneData={...this.sceneData,walls:this.sceneData.walls.filter(w=>!ids.has(w.id)),rooms:this.sceneData.rooms.filter(r=>!ids.has(r.id)),items:this.sceneData.items.filter(i=>!ids.has(i.id)),openings:this.sceneData.openings.filter(o=>!ids.has(o.id)&&!ids.has(o.wallId??"")),virtualCameras:this.sceneData.virtualCameras?.filter(c=>!ids.has(c.id))};
+    this.pushHistory();this.setSelection([]);this.emit("scene-change",this.sceneData);
   }
 
   // ─── Collision detection ──────────────────────────────────────────────────────
@@ -1668,7 +1489,7 @@ export class SketchEngine {
   // ─── Ghost overlays ──────────────────────────────────────────────────────────
 
   private clearGhost() {
-    this.ghostGroup.clear();
+    this.releaseGroup(this.ghostGroup);
     this.ghostLine = null;
     this.ghostRect = null;
     this.ghostDim = null;
@@ -1725,13 +1546,33 @@ export class SketchEngine {
 
   // ─── 3D scene rebuild ────────────────────────────────────────────────────────
 
-  private getOrCreateTexture(materialId: string): THREE.Texture {
-    let tex = this.textureCache.get(materialId);
+  private getOrCreateTexture(materialId: string, roomId = "shared"): THREE.Texture {
+    const key = `${roomId}:${materialId}`;
+    let tex = this.textureCache.get(key);
     if (!tex) {
-      tex = createProceduralTexture(materialId);
-      this.textureCache.set(materialId, tex);
+      tex = materialId.startsWith("data:image/") ? new THREE.TextureLoader().load(materialId) : createProceduralTexture(materialId);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this.textureCache.set(key, tex);
     }
     return tex;
+  }
+
+  private releaseGroup(group: THREE.Object3D) {
+    const cached = new Set(this.textureCache.values());
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+    group.traverse(object => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.geometry) geometries.add(mesh.geometry);
+      if (mesh.material) for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        materials.add(material);
+        for (const value of Object.values(material)) if (value instanceof THREE.Texture && !cached.has(value)) textures.add(value);
+      }
+    });
+    geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); textures.forEach(t => t.dispose());
+    group.clear();
   }
 
   private getMaterialRepeat(materialId: string): number {
@@ -1751,7 +1592,7 @@ export class SketchEngine {
 
   private updateGizmoAttachment() {
     if (!this.transformControls) return;
-    if (this.activeView !== "top" && this.selectedId) {
+    if (this.activeView !== "top" && this.selectedId && this.selectedObjects.length <= 1) {
       if (this.selectedType === "item") {
         const obj = this.itemGroup.getObjectByName("item-" + this.selectedId);
         if (obj) {
@@ -1822,12 +1663,14 @@ export class SketchEngine {
   // ─── 3D scene rebuild ────────────────────────────────────────────────────────
 
   rebuildScene() {
-    this.wallGroup.clear();
-    this.roomGroup.clear();
-    this.openingGroup.clear();
-    this.itemGroup.clear();
-    this.dimGroup.clear();
-    this.cameraMarkerGroup.clear();
+    this.selectionIds = new Set(this.effectiveSelection().map(o=>o.id));
+    this.rebuildReference();
+    this.releaseGroup(this.wallGroup);
+    this.releaseGroup(this.roomGroup);
+    this.releaseGroup(this.openingGroup);
+    this.releaseGroup(this.itemGroup);
+    this.releaseGroup(this.dimGroup);
+    this.releaseGroup(this.cameraMarkerGroup);
 
     // Dispose old floor slab geometry/materials before clearing
     this.floorSlabGroup.traverse((obj) => {
@@ -1960,9 +1803,7 @@ export class SketchEngine {
       return;
     }
 
-    // Plan view keeps the dark drafting line; in 3D an unpainted wall is light plaster,
-    // otherwise interiors read as solid black
-    const wallColor = wall.color ?? (this.activeView === "top" ? COLORS.wallSide : COLORS.wall3d);
+    const wallColor = wall.color ?? COLORS.wallSide;
     const mat = new THREE.MeshLambertMaterial({ color: wallColor });
 
     // Openings on this wall (Feature C.5: split-geometry cutouts)
@@ -2083,37 +1924,33 @@ export class SketchEngine {
     const edgeMat = new THREE.MeshBasicMaterial({ color: COLORS.wallTop });
     const edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
     edgeMesh.rotation.y = angle;
-    edgeMesh.position.set(mid[0], yOffset + h - 0.012, mid[1]); // sits just proud of the wall top (no z-fighting)
+    edgeMesh.position.set(mid[0], yOffset + h - 0.02, mid[1]);
     this.wallGroup.add(edgeMesh);
 
     // Selection highlight
-    if (wall.id === this.selectedId) {
+    if (this.isSelected(wall.id)) {
       const selectGeo = new THREE.BoxGeometry(len + 0.05, h + 0.05, thick + 0.05);
       const selectMat = new THREE.MeshBasicMaterial({ color: COLORS.selected, wireframe: true });
       const selectMesh = new THREE.Mesh(selectGeo, selectMat);
       selectMesh.rotation.y = angle;
       selectMesh.position.set(mid[0], yOffset + h / 2, mid[1]);
-      selectMesh.userData.helper = true;
       this.wallGroup.add(selectMesh);
     }
 
-    // Endpoint handles (plan view, select mode)
-    if (this.activeTool === "select" && this.activeView === "top") {
+    // Endpoint handles (visible in select mode)
+    if (this.activeTool === "select") {
       for (const ep of [wall.a, wall.b]) {
         const hGeo = new THREE.SphereGeometry(0.12, 8, 8);
         const hMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
         const hMesh = new THREE.Mesh(hGeo, hMat);
         hMesh.position.set(ep[0], yOffset + 0.12, ep[1]);
-        hMesh.userData.helper = true;
         this.wallGroup.add(hMesh);
       }
     }
 
-    // Dimension label — a drafting aid, so plan view only
-    if (this.activeView === "top") {
-      const dimPos: Vec2 = [mid[0], mid[1]];
-      this.addSceneDim(`${len.toFixed(2)}m`, dimPos, yOffset + 0.3);
-    }
+    // Dimension label
+    const dimPos: Vec2 = [mid[0], mid[1]];
+    this.addSceneDim(`${len.toFixed(2)}m`, dimPos, yOffset + 0.3);
   }
 
   private buildRoom3d(room: Room, yOffset = 0, isGhost = false) {
@@ -2126,7 +1963,7 @@ export class SketchEngine {
         opacity: 0.15,
       });
     } else if (room.materialId) {
-      const tex = this.getOrCreateTexture(room.materialId);
+      const tex = this.getOrCreateTexture(room.materialId, room.id);
       const repeat = this.getMaterialRepeat(room.materialId);
       tex.repeat.set(room.w * repeat, room.d * repeat);
       mat = new THREE.MeshStandardMaterial({
@@ -2149,21 +1986,13 @@ export class SketchEngine {
     if (!isGhost) {
       // Room outline
       const edges = new THREE.EdgesGeometry(geo);
-      const isSelected = room.id === this.selectedId;
-      const lineMat = new THREE.LineBasicMaterial({ color: isSelected ? COLORS.selected : 0x98a878 });
+      const lineMat = new THREE.LineBasicMaterial({ color: this.isSelected(room.id) ? COLORS.selected : 0x98a878 });
       const line = new THREE.LineSegments(edges, lineMat);
       line.position.copy(mesh.position);
       this.roomGroup.add(line);
-      if (isSelected) {
-        const hiGeo = new THREE.BoxGeometry(room.w, 0.02, room.d);
-        const hi = new THREE.Mesh(hiGeo, new THREE.MeshBasicMaterial({ color: COLORS.selected, transparent: true, opacity: 0.22, depthWrite: false }));
-        hi.position.set(mesh.position.x, mesh.position.y + 0.012, mesh.position.z);
-        hi.userData.helper = true;
-        this.roomGroup.add(hi);
-      }
 
-      // Room label sprite — name and floor area (hidden when walking inside)
-      if (this.activeView !== "eye-level") this.addSceneDim(`${room.name} · ${(room.w * room.d).toFixed(1)} m²`, [room.x + room.w / 2, room.z + room.d / 2], yOffset + 0.15);
+      // Room label sprite
+      this.addSceneDim(room.name, [room.x + room.w / 2, room.z + room.d / 2], yOffset + 0.15);
     }
   }
 
@@ -2195,7 +2024,7 @@ export class SketchEngine {
 
   private buildItem3d(item: Item, yOffset = 0, isGhost = false) {
     if (item.kind === "label") {
-      if (!isGhost && this.activeView !== "eye-level") this.addSceneDim(item.label ?? "Label", [item.x, item.z], yOffset + 0.3);
+      if (!isGhost) this.addSceneDim(item.label ?? "Label", [item.x, item.z], yOffset + 0.3);
       return;
     }
     const [w, d] = FURNITURE_SIZES[item.kind];
@@ -2207,7 +2036,7 @@ export class SketchEngine {
     group.rotation.y = item.rot;
     group.scale.set(sc, sc, sc);
 
-    const isSelected = item.id === this.selectedId;
+    const isSelected = this.isSelected(item.id);
     const hasOverlap = this.checkOverlaps(item);
     const color = isSelected ? COLORS.selected : COLORS.furniture;
     const mat = new THREE.MeshLambertMaterial({ color });
@@ -2273,7 +2102,6 @@ export class SketchEngine {
       const overlapMat = new THREE.MeshBasicMaterial({ color: COLORS.overlap, wireframe: true });
       const overlapMesh = new THREE.Mesh(overlapGeo, overlapMat);
       overlapMesh.position.y = 0.4;
-      overlapMesh.userData.helper = true;
       group.add(overlapMesh);
     }
 
@@ -2282,34 +2110,30 @@ export class SketchEngine {
 
   private addSceneDim(text: string, pos: Vec2, yOffset: number) {
     const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d")!;
-    const FONT = "bold 28px system-ui";
-    // Size the label to its text so long room names are never clipped
-    ctx.font = FONT;
-    const W = Math.max(160, Math.ceil(ctx.measureText(text).width) + 44);
-    canvas.width = W;
+    canvas.width = 320;
     canvas.height = 80;
-    ctx.clearRect(0, 0, W, 80);
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, 320, 80);
     ctx.fillStyle = "rgba(30,32,25,0.78)";
-    ctx.roundRect(0, 0, W, 80, 8);
+    ctx.roundRect(0, 0, 320, 80, 8);
     ctx.fill();
     ctx.fillStyle = "#f0f0e8";
-    ctx.font = FONT;
+    ctx.font = "bold 28px system-ui";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(text, W / 2, 40);
+    ctx.fillText(text, 160, 40);
     const tex = new THREE.CanvasTexture(canvas);
     const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
     const sprite = new THREE.Sprite(mat);
     sprite.position.set(pos[0], yOffset, pos[1]);
-    sprite.scale.set((2 * W) / 320, 0.5, 1);
+    sprite.scale.set(2, 0.5, 1);
     this.dimGroup.add(sprite);
   }
 
   // ─── Virtual camera markers ───────────────────────────────────────────────────
 
   private buildCameraMarker3d(cam: VirtualCamera) {
-    const isSelected = this.selectedId === cam.id;
+    const isSelected = this.isSelected(cam.id);
     const markerColor = isSelected ? 0xcdec52 : COLORS.camera;
     const group = new THREE.Group();
     group.name = "camera-" + cam.id;
@@ -2492,8 +2316,7 @@ export class SketchEngine {
       fov: 55,
     };
     this.addVirtualCamera(cam);
-    this.selectedId = cam.id;
-    this.selectedType = "camera";
+    this.setSelection([{id:cam.id,type:"camera"}]);
     return cam;
   }
 
@@ -2549,32 +2372,53 @@ export class SketchEngine {
 
   /** Switch the perspective camera to the given virtual camera's viewpoint. */
   switchToCamera(cam: VirtualCamera) {
-    const fromPos = this.perspCamera.position.clone();
-    const toPos = new THREE.Vector3(cam.position[0], cam.heightM, cam.position[1]);
-    const fromTarget = this.controls?.target.clone() ?? new THREE.Vector3(0, 0, 0);
-    const toTarget = new THREE.Vector3(cam.targetPosition[0], 0, cam.targetPosition[1]);
-    this.perspCamera.fov = cam.fov;
-    this.perspCamera.updateProjectionMatrix();
     this.setView("perspective");
-    this.tweenCamera(fromPos, toPos, fromTarget, toTarget);
+    cancelAnimationFrame(this.tweenFrame);
+    const elevation = this.getFloors().find(f => f.id === this.getActiveFloorId())?.elevationM ?? 0;
+    this.perspCamera.position.set(cam.position[0], elevation + cam.heightM, cam.position[1]);
+    this.controls?.target.set(cam.targetPosition[0], elevation + cam.heightM, cam.targetPosition[1]);
+    this.perspCamera.lookAt(cam.targetPosition[0], elevation + cam.heightM, cam.targetPosition[1]);
+    this.perspCamera.fov = cam.fov; this.perspCamera.updateProjectionMatrix();
+    this.controls?.update();
   }
 
-  /** High-resolution snapshot from a virtual camera. */
+  private capture(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera, width = 1024, height = 768): string {
+    const pixelRatio = this.renderer.getPixelRatio(), size = this.renderer.getSize(new THREE.Vector2());
+    const background = this.scene3d.background;
+    const helpers = [this.referenceGroup, this.calibrationGroup, this.cameraMarkerGroup, this.ghostGroup, this.snapGuideGroup, this.transformControlsHelper].filter((g): g is THREE.Object3D => !!g);
+    const visibility = helpers.map(g => g.visible);
+    try {
+      helpers.forEach(g => { g.visible = false; });
+      this.renderer.setPixelRatio(1); this.renderer.setSize(width, height, false);
+      this.scene3d.background = new THREE.Color(0xf5f4ef);
+      if (camera instanceof THREE.PerspectiveCamera) camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      this.renderer.render(this.scene3d, camera);
+      return this.canvas.toDataURL("image/png");
+    } finally {
+      helpers.forEach((g, i) => { g.visible = visibility[i]; });
+      this.scene3d.background = background;
+      this.renderer.setPixelRatio(pixelRatio); this.renderer.setSize(size.x, size.y, false);
+      this.renderer.render(this.scene3d, this.camera);
+    }
+  }
+
   captureFromCamera(cam: VirtualCamera, width = 2560, height = 1440): string {
-    const prevW = this.canvas.clientWidth;
-    const prevH = this.canvas.clientHeight;
-    this.renderer.setSize(width, height, false);
-    const prevFov = this.perspCamera.fov;
-    this.perspCamera.fov = cam.fov;
-    this.perspCamera.position.set(cam.position[0], cam.heightM, cam.position[1]);
-    this.perspCamera.lookAt(cam.targetPosition[0], 0, cam.targetPosition[1]);
-    this.perspCamera.updateProjectionMatrix();
-    this.renderer.render(this.scene3d, this.perspCamera);
-    const dataUrl = this.canvas.toDataURL("image/png");
-    this.renderer.setSize(prevW, prevH, false);
-    this.perspCamera.fov = prevFov;
-    this.perspCamera.updateProjectionMatrix();
-    return dataUrl;
+    const camera = this.perspCamera.clone();
+    const elevation = this.getFloors().find(f => f.id === this.getActiveFloorId())?.elevationM ?? 0;
+    camera.fov = cam.fov;
+    camera.position.set(cam.position[0], elevation + cam.heightM, cam.position[1]);
+    camera.lookAt(cam.targetPosition[0], elevation + cam.heightM, cam.targetPosition[1]);
+    return this.capture(camera, width, height);
+  }
+
+  reorderCamera(id: string, direction: number) {
+    const cameras = [...(this.sceneData.virtualCameras ?? [])];
+    const index = cameras.findIndex(c => c.id === id), target = index + direction;
+    if (index < 0 || target < 0 || target >= cameras.length) return;
+    [cameras[index], cameras[target]] = [cameras[target], cameras[index]];
+    this.sceneData = { ...this.sceneData, virtualCameras: cameras };
+    this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
   }
 
   /** Add a virtual camera to the scene. */
@@ -2621,145 +2465,83 @@ export class SketchEngine {
   // ─── Undo / Redo ─────────────────────────────────────────────────────────────
 
   private pushHistory() {
-    // Truncate forward history
+    this.syncActiveFloorScene();
+    const snapshot = structuredClone(this.projectData);
+    if (JSON.stringify(this.history[this.historyIndex]) === JSON.stringify(snapshot)) return;
     this.history = this.history.slice(0, this.historyIndex + 1);
-    this.history.push(JSON.parse(JSON.stringify(this.sceneData)));
-    if (this.history.length > this.MAX_HISTORY) {
-      this.history.shift();
-    }
+    this.history.push(snapshot);
+    if (this.history.length > this.MAX_HISTORY) this.history.shift();
     this.historyIndex = this.history.length - 1;
-    this.emit("history-change", { canUndo: this.historyIndex > 0, canRedo: false });
+    this.emitHistory();
   }
 
-  private restoreHistoryEntry() {
-    const prevCanvas = JSON.stringify(this.sceneData.canvas);
-    this.sceneData = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
-    if (JSON.stringify(this.sceneData.canvas) !== prevCanvas) this.buildGrid(this.sceneData.canvas);
-    if (this.selectedId) {
-      this.selectedId = null;
-      this.selectedType = null;
-      this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
-    }
+  private emitHistory() {
+    this.emit("history-change", { canUndo: this.historyIndex > 0, canRedo: this.historyIndex < this.history.length - 1 });
+  }
+
+  private restoreSnapshot(project: Project) {
+    this.cancelTool();
+    this.selectedId = null; this.selectedType = null; this.selectedObjects = [];
+    this.transformControls?.detach();
+    this.projectData = structuredClone(project);
+    this.sceneData = activeFloor(this.projectData);
+    this.buildGrid(this.sceneData.canvas);
     this.rebuildScene();
+    this.notifySelection();
+    this.emit("scene-change", this.sceneData);
+    this.emitHistory();
   }
 
   undo() {
     if (this.historyIndex <= 0) return;
-    this.historyIndex--;
-    this.restoreHistoryEntry();
-    this.emit("scene-change", this.sceneData);
-    this.emit("history-change", {
-      canUndo: this.historyIndex > 0,
-      canRedo: this.historyIndex < this.history.length - 1,
-    });
+    this.restoreSnapshot(this.history[--this.historyIndex]);
   }
 
   redo() {
     if (this.historyIndex >= this.history.length - 1) return;
-    this.historyIndex++;
-    this.restoreHistoryEntry();
-    this.emit("scene-change", this.sceneData);
-    this.emit("history-change", {
-      canUndo: this.historyIndex > 0,
-      canRedo: this.historyIndex < this.history.length - 1,
-    });
+    this.restoreSnapshot(this.history[++this.historyIndex]);
   }
 
-  // ─── Scene data accessors ────────────────────────────────────────────────────
+  getScene(): Scene { return this.sceneData; }
 
-  getScene(): Scene {
-    return this.sceneData;
-  }
-
-  /**
-   * Replace the active floor with the given scene. The plan is re-centred on the
-   * drawing sheet (generated plans start at 0,0 while the sheet is centred on the
-   * origin) and the sheet grows if the plan would not fit. Undoable.
-   */
   loadScene(scene: Scene) {
-    this.cancelTool();
-    this.selectedId = null;
-    this.selectedType = null;
-    this.sceneData = SketchEngine.centreScene(scene, this.getCanvasBounds());
-    this.syncActiveFloorScene();
-    this.buildGrid(this.sceneData.canvas);
+    if (!validateScene(scene)) throw new Error("The layout contains invalid geometry.");
+    const project = emptyProject(); project.floors[0].scene = scene;
+    this.sceneData = normalizeProject(project).floors[0].scene;
+    this.cancelTool(); this.selectedId = null; this.selectedType = null; this.selectedObjects = [];
     this.pushHistory();
+    this.buildGrid(this.sceneData.canvas);
     this.rebuildScene();
-    this.fitView(false);
-    this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
+    this.fitToPlan();
+    this.notifySelection();
     this.emit("scene-change", this.sceneData);
   }
 
-  private static centreScene(scene: Scene, current: CanvasBounds): Scene {
-    const pts: Vec2[] = [];
-    for (const w of scene.walls) pts.push(w.a, w.b);
-    for (const r of scene.rooms) pts.push([r.x, r.z], [r.x + r.w, r.z + r.d]);
-    for (const it of scene.items) pts.push([it.x, it.z]);
-    const gridStep = scene.canvas?.gridStep ?? current.gridStep ?? SNAP_GRID;
-    if (!pts.length) {
-      return { ...scene, canvas: scene.canvas ?? { ...current } };
-    }
-    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-    for (const [x, z] of pts) {
-      minX = Math.min(minX, x); minZ = Math.min(minZ, z);
-      maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z);
-    }
-    const ox = snap((minX + maxX) / 2);
-    const oz = snap((minZ + maxZ) / 2);
-    const mv = (p: Vec2): Vec2 => [snap(p[0] - ox), snap(p[1] - oz)];
-    // Sheet = plan + 2 m of breathing room on every side, never smaller than 8 × 6 m
-    const widthM = Math.max(8, Math.ceil(maxX - minX + 4));
-    const depthM = Math.max(6, Math.ceil(maxZ - minZ + 4));
-    return {
-      ...scene,
-      canvas: { widthM, depthM, gridStep },
-      walls: scene.walls.map((w) => ({ ...w, a: mv(w.a), b: mv(w.b) })),
-      rooms: scene.rooms.map((r) => ({ ...r, x: snap(r.x - ox), z: snap(r.z - oz) })),
-      openings: scene.openings.map((o) => ({ ...o, at: mv(o.at) })),
-      items: scene.items.map((it) => ({ ...it, x: snap(it.x - ox), z: snap(it.z - oz) })),
-      virtualCameras: scene.virtualCameras?.map((c) => ({ ...c, position: mv(c.position), targetPosition: mv(c.targetPosition) })),
-    };
-  }
-
-  clearScene() {
-    this.loadScene({ ...emptyScene(), canvas: { ...this.getCanvasBounds() } });
-  }
-
-  getSelectedId(): string | null {
-    return this.selectedId;
-  }
-
-  getSelectedType(): "item" | "wall" | "opening" | "camera" | "camera-target" | "room" | null {
-    return this.selectedType;
-  }
-
-  // ─── Multi-floor Project Methods (Feature E) ─────────────────────────────────
+  clearScene() { this.loadScene({ ...emptyScene(), canvas: this.getCanvasBounds() }); }
+  getSelectedId(): string | null { return this.selectedId; }
+  getSelectedType() { return this.selectedType; }
 
   syncActiveFloorScene() {
-    const f = this.projectData.floors.find((fl) => fl.id === this.projectData.activeFloorId);
-    if (f) {
-      f.scene = this.sceneData;
-    }
+    const floor = this.projectData.floors.find(f => f.id === this.projectData.activeFloorId);
+    if (floor) floor.scene = this.sceneData;
   }
 
-  getProject(): Project {
-    this.syncActiveFloorScene();
-    return this.projectData;
-  }
+  getProject(): Project { this.syncActiveFloorScene(); return this.projectData; }
 
-  setProject(project: Project) {
-    this.projectData = project;
-    this.sceneData = activeFloor(project);
-    this.history = [];
-    this.historyIndex = -1;
+  setProject(project: Project, resetHistory = true) {
+    const prepared = parseProject(project);
+    prepared.id = project.id ?? nanoid();
+    if (resetHistory) { this.history = []; this.historyIndex = -1; }
+    this.projectData = prepared;
+    this.sceneData = activeFloor(prepared);
     this.pushHistory();
-    this.selectedId = null;
-    this.selectedType = null;
-    this.buildGrid(this.sceneData.canvas);
-    this.rebuildScene();
-    this.fitView(false);
-    this.emit("selection-change", { id: null, type: null, screenX: 0, screenY: 0 });
-    this.emit("scene-change", this.sceneData);
+    this.restoreSnapshot(prepared);
+    this.fitToPlan();
+  }
+
+  renameProject(name: string) {
+    this.projectData.name = name.trim().slice(0, 80) || "Untitled Project";
+    this.pushHistory(); this.autosave(); this.emit("scene-change", this.sceneData);
   }
 
   getActiveFloorId(): string {
@@ -2773,47 +2555,36 @@ export class SketchEngine {
   setActiveFloor(floorId: string) {
     if (this.projectData.activeFloorId === floorId) return;
     this.syncActiveFloorScene();
-    const targetFloor = this.projectData.floors.find((fl) => fl.id === floorId);
-    if (!targetFloor) return;
+    const target = this.projectData.floors.find(f => f.id === floorId);
+    if (!target) return;
+    this.cancelTool(); this.selectedId = null; this.selectedType = null; this.selectedObjects = [];
     this.projectData.activeFloorId = floorId;
-    this.sceneData = targetFloor.scene;
-    this.history = [];
-    this.historyIndex = -1;
-    this.pushHistory();
+    this.sceneData = target.scene;
     this.buildGrid(this.sceneData.canvas);
-    this.rebuildScene();
+    this.rebuildScene(); this.fitToPlan();
+    this.notifySelection();
     this.emit("scene-change", this.sceneData);
   }
 
   addFloor(name?: string): string {
     this.syncActiveFloorScene();
     const id = "floor-" + nanoid();
-    const count = this.projectData.floors.length;
-    const prevElevation = this.projectData.floors[count - 1]?.elevationM ?? 0;
-    const newFloor: FloorLevel = {
-      id,
-      name: name ?? `Floor ${count}`,
-      elevationM: prevElevation + 3.0,
-      scene: {
-        ...emptyScene(),
-        canvas: this.sceneData.canvas ? { ...this.sceneData.canvas } : undefined,
-      },
-    };
-    this.projectData.floors.push(newFloor);
-    this.setActiveFloor(id);
+    this.projectData.floors.push({ id, name: name ?? `Floor ${this.projectData.floors.length}`, elevationM: (this.projectData.floors.at(-1)?.elevationM ?? 0) + 3, scene: { ...emptyScene(), canvas: { ...this.getCanvasBounds() } } });
+    this.setActiveFloor(id); this.pushHistory();
     return id;
   }
 
   deleteFloor(floorId: string) {
-    if (this.projectData.floors.length <= 1) return;
+    if (this.projectData.floors.length <= 1 || !this.projectData.floors.some(f => f.id === floorId)) return;
     this.syncActiveFloorScene();
-    this.projectData.floors = this.projectData.floors.filter((fl) => fl.id !== floorId);
+    this.projectData.floors = this.projectData.floors.filter(f => f.id !== floorId);
     if (this.projectData.activeFloorId === floorId) {
-      this.setActiveFloor(this.projectData.floors[0].id);
-    } else {
-      this.rebuildScene();
-      this.emit("scene-change", this.sceneData);
+      this.projectData.activeFloorId = this.projectData.floors[0].id;
+      this.sceneData = this.projectData.floors[0].scene;
     }
+    this.cancelTool(); this.selectedId = null; this.selectedType = null; this.selectedObjects = [];
+    this.pushHistory(); this.buildGrid(this.sceneData.canvas); this.rebuildScene();
+    this.emit("scene-change", this.sceneData);
   }
 
   // ─── 3D Gizmo Controls (Feature B2) ──────────────────────────────────────────
@@ -2865,14 +2636,25 @@ export class SketchEngine {
   }
 
   updateRoom(id: string, updates: Partial<Room>) {
-    this.sceneData = {
-      ...this.sceneData,
-      rooms: this.sceneData.rooms.map((r) => (r.id === id ? { ...r, ...updates } : r)),
-    };
-    this.syncActiveFloorScene();
-    this.pushHistory();
-    this.rebuildScene();
-    this.emit("scene-change", this.sceneData);
+    const previous = this.sceneData.rooms.find(r => r.id === id);
+    if (!previous) return;
+    const next = { ...previous, ...updates };
+    if (![next.x,next.z,next.w,next.d].every(Number.isFinite) || next.w < .2 || next.d < .2) return;
+    const cb = this.getCanvasBounds();
+    if (next.x < -cb.widthM/2 || next.z < -cb.depthM/2 || next.x+next.w > cb.widthM/2 || next.z+next.d > cb.depthM/2) throw new Error("The room must fit inside the canvas. Enlarge the canvas first.");
+    if (updates.w !== undefined || updates.d !== undefined) {
+      const x0=previous.x, x1=x0+previous.w, z0=previous.z, z1=z0+previous.d;
+      const vertices = this.sceneData.walls.flatMap(w => (["a","b"] as const).map(endpoint => ({id:w.id,endpoint,at:w[endpoint]})));
+      for (const {id:wallId,endpoint,at} of vertices) {
+        const boundary = ((Math.abs(at[0]-x0)<.001 || Math.abs(at[0]-x1)<.001) && at[1]>=z0-.001 && at[1]<=z1+.001) || ((Math.abs(at[1]-z0)<.001 || Math.abs(at[1]-z1)<.001) && at[0]>=x0-.001 && at[0]<=x1+.001);
+        if (!boundary) continue;
+        const target: Vec2 = [next.x+(at[0]-x0)*next.w/previous.w,next.z+(at[1]-z0)*next.d/previous.d];
+        const current=this.sceneData.walls.find(w=>w.id===wallId)?.[endpoint];
+        if (current && dist(current,at)<.001 && dist(current,target)>.001) this.sceneData=moveJunction(this.sceneData,wallId,endpoint,target);
+      }
+    }
+    this.sceneData = { ...this.sceneData, rooms: this.sceneData.rooms.map(r => r.id === id ? next : r) };
+    this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
   }
 
   updateVirtualCamera(id: string, updates: Partial<VirtualCamera>) {
@@ -2897,19 +2679,20 @@ export class SketchEngine {
   private autosave() {
     try {
       this.syncActiveFloorScene();
-      localStorage.setItem("sketch-space-v2", JSON.stringify(this.projectData));
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.sceneData));
+      localStorage.setItem(`sketch-space-draft-${workspaceOwner()}`, JSON.stringify(this.projectData));
+      this.emit("save-status", "Draft saved in this browser");
     } catch {
-      /* quota exceeded */
+      this.emit("save-status", "Draft could not be saved. Export JSON to keep a copy.");
     }
   }
 
   private loadAutosave() {
     try {
       // 1. Check v2 Project format
-      const v2 = localStorage.getItem("sketch-space-v2");
+      const v2 = localStorage.getItem(`sketch-space-draft-${workspaceOwner()}`) ?? (workspaceOwner() === "guest" ? localStorage.getItem("sketch-space-v2") : null);
       if (v2) {
-        const parsed = JSON.parse(v2) as Project;
+        const parsed = parseProject(JSON.parse(v2));
+        parsed.id ??= nanoid();
         if (isProject(parsed) && parsed.floors.length > 0) {
           this.projectData = parsed;
           this.sceneData = activeFloor(parsed);
@@ -2922,12 +2705,13 @@ export class SketchEngine {
       }
 
       // 2. Fallback to v1 Scene format with automatic migration wrapper
-      const raw = localStorage.getItem(this.STORAGE_KEY);
+      const raw = workspaceOwner() === "guest" ? localStorage.getItem(this.STORAGE_KEY) : null;
       if (raw) {
-        const legacyScene = JSON.parse(raw) as Scene;
+        const legacyScene = parseProject(JSON.parse(raw)).floors[0].scene;
         this.sceneData = legacyScene;
         this.projectData = {
           unit: "m",
+          id: nanoid(),
           name: "Imported Project",
           activeFloorId: "floor-0",
           floors: [
@@ -2949,36 +2733,27 @@ export class SketchEngine {
   // ─── Capture ─────────────────────────────────────────────────────────────────
 
   captureTopDown(): string {
-    const prevBg = this.scene3d.background;
-    this.scene3d.background = new THREE.Color(0xffffff);
-    this.dimGroup.visible = true;
-    this.renderer.render(this.scene3d, this.orthoCamera);
-    const data = this.canvas.toDataURL("image/png");
-    this.scene3d.background = prevBg;
-    return data;
+    const camera = this.orthoCamera.clone();
+    const bounds = sceneBounds({...this.sceneData,reference:undefined}), cb = this.getCanvasBounds();
+    const width = bounds ? bounds.maxX-bounds.minX : cb.widthM, depth = bounds ? bounds.maxZ-bounds.minZ : cb.depthM;
+    const half = Math.max(depth/2, width/(2*4/3), 1)*1.15;
+    camera.left=-half*4/3; camera.right=half*4/3; camera.top=half; camera.bottom=-half; camera.zoom=1;
+    const cx = bounds ? (bounds.minX+bounds.maxX)/2 : 0, cz = bounds ? (bounds.minZ+bounds.maxZ)/2 : 0;
+    camera.position.set(cx, 100, cz); camera.lookAt(cx,0,cz);
+    return this.capture(camera);
   }
 
-  capturePerspective(): string {
-    const prevBg = this.scene3d.background;
-    this.scene3d.background = new THREE.Color(0xd8e4f0);
-    this.renderer.render(this.scene3d, this.perspCamera);
-    const data = this.canvas.toDataURL("image/png");
-    this.scene3d.background = prevBg;
-    return data;
-  }
-
+  capturePerspective(): string { return this.capture(this.perspCamera.clone()); }
   captureEyeLevel(): string {
-    const saved = this.perspCamera.position.clone();
-    this.perspCamera.position.set(0, EYE_LEVEL, 6);
-    this.perspCamera.lookAt(0, EYE_LEVEL, 0);
-    const data = this.canvas.toDataURL("image/png");
-    this.perspCamera.position.copy(saved);
-    return data;
+    const camera = this.perspCamera.clone();
+    camera.position.set(0,EYE_LEVEL,6); camera.lookAt(0,EYE_LEVEL,0);
+    return this.capture(camera);
   }
 
   // ─── SVG Export ──────────────────────────────────────────────────────────────
 
   exportSVG(): string {
+    const escape = (value: string) => value.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[c]!));
     const SCALE = 50; // pixels per metre
     const MARGIN = 30;
     // Calculate bounds
@@ -3006,7 +2781,7 @@ export class SketchEngine {
     // Rooms
     for (const r of this.sceneData.rooms) {
       svg += `<rect x="${px(r.x)}" y="${pz(r.z)}" width="${r.w * SCALE}" height="${r.d * SCALE}" fill="#e8edcf" stroke="#98a878" stroke-width="1"/>`;
-      svg += `<text x="${px(r.x + r.w / 2)}" y="${pz(r.z + r.d / 2)}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui" font-size="11" fill="#333">${r.name}</text>`;
+      svg += `<text x="${px(r.x + r.w / 2)}" y="${pz(r.z + r.d / 2)}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui" font-size="11" fill="#333">${escape(r.name)}</text>`;
     }
 
     // Walls
@@ -3028,11 +2803,13 @@ export class SketchEngine {
     // Items
     for (const it of this.sceneData.items) {
       if (it.kind === "label") {
-        svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" font-family="system-ui" font-size="10" fill="#333">${it.label ?? ""}</text>`;
+        svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" font-family="system-ui" font-size="10" fill="#333">${escape(it.label ?? "")}</text>`;
       } else {
-        const [w, d] = FURNITURE_SIZES[it.kind];
+        const [baseW, baseD] = FURNITURE_SIZES[it.kind];
+        const w = baseW * (it.scale ?? 1), d = baseD * (it.scale ?? 1);
+        svg += `<g transform="rotate(${it.rot * 180 / Math.PI} ${px(it.x)} ${pz(it.z)})">`;
         svg += `<rect x="${px(it.x - w / 2)}" y="${pz(it.z - d / 2)}" width="${w * SCALE}" height="${d * SCALE}" fill="#8a9a6a" opacity="0.6" stroke="#5a6a3a" stroke-width="0.8"/>`;
-        svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui" font-size="7" fill="#2e3128">${it.kind}</text>`;
+        svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui" font-size="7" fill="#2e3128">${it.kind}</text></g>`;
       }
     }
 
@@ -3045,87 +2822,106 @@ export class SketchEngine {
   exportGLB(): Promise<ArrayBuffer> {
     return new Promise((resolve, reject) => {
       const exporter = new GLTFExporter();
-      // Export the entire scene group (walls + rooms + items)
       const exportGroup = new THREE.Group();
-      exportGroup.add(this.wallGroup.clone());
-      exportGroup.add(this.roomGroup.clone());
-      exportGroup.add(this.openingGroup.clone());
-      exportGroup.add(this.itemGroup.clone());
-      // Selection outlines, drag handles and overlap warnings are editor-only
-      const helpers: THREE.Object3D[] = [];
-      exportGroup.traverse((obj) => { if (obj.userData.helper) helpers.push(obj); });
-      helpers.forEach((obj) => obj.parent?.remove(obj));
+      const savedScene = this.sceneData;
+      const savedWalls = this.wallGroup, savedRooms = this.roomGroup, savedItems = this.itemGroup;
+      const savedOpenings = this.openingGroup, savedSlabs = this.floorSlabGroup, savedDims = this.dimGroup;
+      const savedTool = this.activeTool, savedSelection = this.selectedId, savedObjects = this.selectedObjects, savedIds = this.selectionIds;
+      this.syncActiveFloorScene();
+      this.wallGroup = new THREE.Group(); this.roomGroup = new THREE.Group(); this.itemGroup = new THREE.Group();
+      this.openingGroup = new THREE.Group(); this.floorSlabGroup = new THREE.Group(); this.dimGroup = new THREE.Group();
+      this.activeTool = "wall"; this.selectedId = null; this.selectedObjects = []; this.selectionIds = new Set();
+      try {
+        for (const floor of this.projectData.floors) {
+          this.sceneData = floor.scene;
+          this.buildFloorSlab(floor);
+          floor.scene.walls.forEach(w => this.buildWall3d(w, floor.elevationM));
+          floor.scene.rooms.forEach(r => this.buildRoom3d(r, floor.elevationM));
+          floor.scene.openings.forEach(o => this.buildOpening3d(o, floor.elevationM));
+          floor.scene.items.forEach(i => this.buildItem3d(i, floor.elevationM));
+        }
+        exportGroup.add(this.wallGroup, this.roomGroup, this.itemGroup, this.openingGroup, this.floorSlabGroup);
+        this.releaseGroup(this.dimGroup);
+      } finally {
+        this.sceneData = savedScene; this.wallGroup = savedWalls; this.roomGroup = savedRooms; this.itemGroup = savedItems;
+        this.openingGroup = savedOpenings; this.floorSlabGroup = savedSlabs; this.dimGroup = savedDims;
+        this.activeTool = savedTool; this.selectedId = savedSelection; this.selectedObjects = savedObjects; this.selectionIds = savedIds;
+      }
       exporter.parse(
         exportGroup,
         (result) => {
+          this.releaseGroup(exportGroup);
           if (result instanceof ArrayBuffer) {
             resolve(result);
           } else {
             reject(new Error("GLB export: unexpected non-binary result"));
           }
         },
-        (err) => reject(err),
-        { binary: true }
+        (err) => { this.releaseGroup(exportGroup); reject(err); },
+        { binary: true, onlyVisible: true }
       );
     });
   }
 
   // ─── WebM Walkthrough Recording ───────────────────────────────────────────────
 
-  startWalkthrough(onStop: (blob: Blob) => void): boolean {
-    if (this.isRecording) return false;
-    this.recordedChunks = [];
+  startWalkthrough(onStop: (blob: Blob) => void, durationSeconds = 12): boolean {
+    if (this.isRecording || typeof MediaRecorder === "undefined" || !this.canvas.captureStream) return false;
+    cancelAnimationFrame(this.tweenFrame);
     const stream = this.canvas.captureStream(30);
-    const opts: MediaRecorderOptions = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-      ? { mimeType: "video/webm;codecs=vp9" }
-      : { mimeType: "video/webm" };
-    this.mediaRecorder = new MediaRecorder(stream, opts);
-    this.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.recordedChunks.push(e.data);
-    };
+    const originalView = this.activeView, originalCamera = this.camera;
+    const referenceVisible=this.referenceGroup.visible;
+    const position = this.perspCamera.position.clone(), rotation = this.perspCamera.quaternion.clone(), fov = this.perspCamera.fov;
+    const target = this.controls?.target.clone();
+    this.recordedChunks = [];
+    const supported = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find(type => MediaRecorder.isTypeSupported(type));
+    if (!supported) { stream.getTracks().forEach(t=>t.stop()); return false; }
+    try { this.mediaRecorder = new MediaRecorder(stream, {mimeType:supported}); }
+    catch { stream.getTracks().forEach(t=>t.stop()); return false; }
+    this.mediaRecorder.ondataavailable = e => { if (e.data.size) this.recordedChunks.push(e.data); };
     this.mediaRecorder.onstop = () => {
-      const blob = new Blob(this.recordedChunks, { type: "video/webm" });
-      onStop(blob);
-      this.isRecording = false;
+      this.isRecording = false; cancelAnimationFrame(this.walkthroughFrame);
+      stream.getTracks().forEach(t=>t.stop());
+      this.camera = originalCamera; this.activeView = originalView;
+      this.referenceGroup.visible=referenceVisible;
+      this.perspCamera.position.copy(position); this.perspCamera.quaternion.copy(rotation); this.perspCamera.fov = fov; this.perspCamera.updateProjectionMatrix();
+      if (target) this.controls?.target.copy(target);
+      if (!this.destroyed) onStop(new Blob(this.recordedChunks,{type:"video/webm"}));
     };
-    this.mediaRecorder.start(100);
-    this.isRecording = true;
-
-    // Animate camera path
-    this.animateWalkthroughPath();
+    this.referenceGroup.visible=false;this.cancelCalibration();
+    this.mediaRecorder.start(100); this.isRecording = true; this.camera = this.perspCamera;
+    this.animateWalkthroughPath(Math.max(3, Math.min(120, durationSeconds))*1000);
     return true;
   }
 
   stopWalkthrough() {
-    if (this.mediaRecorder && this.isRecording) {
-      this.mediaRecorder.stop();
-    }
+    if (this.mediaRecorder?.state === "recording") this.mediaRecorder.stop();
   }
 
-  private animateWalkthroughPath() {
-    // One slow orbit around the plan, sized to what was drawn
-    if (this.activeView !== "perspective") this.setView("perspective");
-    const { target } = this.perspectiveFraming();
-    const b = this.getContentBounds();
-    const radius = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 4) * 0.85 + 4;
-    const height = target.y + radius * 0.55;
-    const duration = 12000;
+  private animateWalkthroughPath(duration: number) {
     const start = performance.now();
+    const cameras = structuredClone(this.sceneData.virtualCameras ?? []);
+    const elevation = this.getFloors().find(f=>f.id===this.getActiveFloorId())?.elevationM ?? 0;
+    const bounds=sceneBounds({...this.sceneData,reference:undefined}), cx=bounds?(bounds.minX+bounds.maxX)/2:0, cz=bounds?(bounds.minZ+bounds.maxZ)/2:0;
+    const radius=bounds?Math.max(bounds.maxX-bounds.minX,bounds.maxZ-bounds.minZ,4):12;
     const animate = () => {
-      if (!this.isRecording) return;
-      const elapsed = performance.now() - start;
-      if (elapsed > duration) {
-        this.stopWalkthrough();
-        return;
+      if (!this.isRecording || this.destroyed) return;
+      const progress = Math.min(1,(performance.now()-start)/duration);
+      if (cameras.length >= 2) {
+        const index=Math.min(cameras.length-2,Math.floor(progress*(cameras.length-1)));
+        const a=cameras[index],b=cameras[index+1];
+        const raw=progress*(cameras.length-1)-index, t=raw*raw*(3-2*raw);
+        const lerp=(a:number,b:number)=>a+(b-a)*t;
+        this.perspCamera.position.set(lerp(a.position[0],b.position[0]),elevation+lerp(a.heightM,b.heightM),lerp(a.position[1],b.position[1]));
+        this.perspCamera.lookAt(lerp(a.targetPosition[0],b.targetPosition[0]),elevation+lerp(a.heightM,b.heightM),lerp(a.targetPosition[1],b.targetPosition[1]));
+        this.perspCamera.fov=lerp(a.fov,b.fov); this.perspCamera.updateProjectionMatrix();
+      } else {
+        const angle=progress*Math.PI*2;
+        this.perspCamera.position.set(cx+Math.sin(angle)*radius,elevation+radius*.6,cz+Math.cos(angle)*radius);
+        this.perspCamera.lookAt(cx,elevation+1,cz);
       }
-      const angle = (elapsed / duration) * Math.PI * 2;
-      this.controls?.target.copy(target);
-      this.perspCamera.position.set(
-        target.x + Math.sin(angle) * radius,
-        height,
-        target.z + Math.cos(angle) * radius
-      );
-      requestAnimationFrame(animate);
+      if (progress>=1) { this.stopWalkthrough(); return; }
+      this.walkthroughFrame=requestAnimationFrame(animate);
     };
     animate();
   }
@@ -3135,15 +2931,11 @@ export class SketchEngine {
   getSceneSummary(): string {
     const s = this.sceneData;
     const lines: string[] = [];
-    const doors = s.openings.filter((o) => o.type === "door").length;
-    const windows = s.openings.length - doors;
-    const area = s.rooms.reduce((sum, r) => sum + r.w * r.d, 0);
-    lines.push(`Floor plan: ${s.walls.length} walls, ${s.rooms.length} rooms (${area.toFixed(1)} m² total), ${doors} doors, ${windows} windows, ${s.items.filter((i) => i.kind !== "label").length} furniture items.`);
+    lines.push(`Floor plan: ${s.walls.length} walls, ${s.rooms.length} rooms, ${s.items.length} furniture items.`);
     for (const r of s.rooms) {
       lines.push(`  Room "${r.name}": ${r.w.toFixed(1)}m × ${r.d.toFixed(1)}m`);
     }
     for (const it of s.items) {
-      if (it.kind === "label") continue;
       const [w, d] = FURNITURE_SIZES[it.kind];
       lines.push(`  ${it.kind}: ${w}×${d}m at (${it.x.toFixed(1)}, ${it.z.toFixed(1)})`);
     }

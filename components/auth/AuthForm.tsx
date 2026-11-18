@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
+import { API_URL } from "../../lib/api";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const [name, setName] = useState("");
