@@ -17,9 +17,11 @@ import {
   Scene,
   Project,
   VirtualCamera,
-  BUILTIN_MATERIALS,
   isValidScene,
 } from "./types";
+import type { SketchEngine } from "./engine";
+import { AiJsonPanel } from "./AiJsonPanel";
+import { MaterialsPanel } from "./MaterialsPanel";
 
 interface Props {
   sceneSummary: string;
@@ -35,13 +37,16 @@ interface Props {
   isRecording: boolean;
   onSendToFloorPlan: () => void;
   onSendTo3D: () => void;
-  onApplyRoomMaterial?: (roomId: string, materialId: string) => void;
   onAddVirtualCamera?: () => void;
   onSwitchCamera?: (cam: VirtualCamera) => void;
   onCaptureCamera?: (cam: VirtualCamera) => void;
   onDeleteCamera?: (camId: string) => void;
   onUpdateCamera?: (camId: string, updates: Partial<VirtualCamera>) => void;
   onLoadGeneratedPlan?: (scene: Scene) => void;
+  onBuildProject?: (project: Project) => boolean;
+  engine?: SketchEngine | null;
+  selectedWallId?: string;
+  selectedRoomId?: string;
 }
 
 type Look = RenderRequest["look"];
@@ -178,13 +183,16 @@ export function RenderPanel({
   isRecording,
   onSendToFloorPlan,
   onSendTo3D,
-  onApplyRoomMaterial,
   onAddVirtualCamera,
   onSwitchCamera,
   onCaptureCamera,
   onDeleteCamera,
   onUpdateCamera,
   onLoadGeneratedPlan,
+  onBuildProject,
+  engine,
+  selectedWallId,
+  selectedRoomId,
 }: Props) {
   const [activeTab, setActiveTab] = useState<"render" | "ai-gen" | "materials" | "cameras">("render");
 
@@ -208,23 +216,11 @@ export function RenderPanel({
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [showRecent, setShowRecent] = useState(false);
 
-  // AI Gen state (Feature F)
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiGenStatus, setAiGenStatus] = useState<"idle" | "generating" | "done" | "error">("idle");
-  const [aiGenMsg, setAiGenMsg] = useState("");
-
-  // Materials state (Feature D)
-  const [selectedRoomId, setSelectedRoomId] = useState<string>("");
 
   useEffect(() => {
     setRecentProjects(getRecentProjects());
   }, []);
 
-  useEffect(() => {
-    if (sceneData?.rooms.length && !sceneData.rooms.some(r => r.id === selectedRoomId)) {
-      setSelectedRoomId(sceneData.rooms[0].id);
-    }
-  }, [sceneData, selectedRoomId]);
 
   async function handleRender() {
     if (!sceneData || (!sceneData.walls.length && !sceneData.rooms.length && !sceneData.items.length)) { setError("Draw or load a layout before rendering."); return; }
@@ -277,55 +273,23 @@ export function RenderPanel({
     setStatus("idle");
   }
 
-  // ── AI Plan Generator action (Feature F) ──────────────────────────────────
-  async function handleGeneratePlan() {
-    if (!aiPrompt.trim()) return;
-    setAiGenStatus("generating");
-    setAiGenMsg("Preparing starter layout...");
-
+  // ── Built-in starter layout (fallback when no external AI is used) ────────
+  async function handleGeneratePlan(brief: string): Promise<string> {
+    let plan: Scene | null = null;
     try {
-      // Attempt backend endpoint first
-      let plan: Scene | null = null;
-      try {
-        const data = await apiRequest<Scene>("/text-to-sketch/plan", { method: "POST", body: JSON.stringify({ prompt: aiPrompt }) });
-        if (isValidScene(data)) plan = data;
-      } catch {
-        // Backend not running, use built-in generator
-      }
-
-      if (!plan) {
-        plan = generateAlgorithmicPlan(aiPrompt);
-      }
-
-      if (plan && onLoadGeneratedPlan) {
-        onLoadGeneratedPlan(plan);
-        setAiGenStatus("done");
-        setAiGenMsg(`Generated plan with ${plan.rooms.length} rooms and ${plan.walls.length} walls!`);
-      }
-    } catch (e) {
-      setAiGenStatus("error");
-      setAiGenMsg(e instanceof Error ? e.message : "Failed to generate plan");
-    }
-  }
-
-  // ── Custom texture file upload (Feature D.6) ──────────────────────────────
-  function handleCustomTextureUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !onApplyRoomMaterial || !selectedRoomId) return;
-    if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 5 * 1024 * 1024) { setError("Choose a PNG, JPG or WEBP texture smaller than 5MB."); return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      onApplyRoomMaterial(selectedRoomId, dataUrl);
-    };
-    reader.readAsDataURL(file);
+      const data = await apiRequest<Scene>("/text-to-sketch/plan", { method: "POST", body: JSON.stringify({ prompt: brief }) });
+      if (isValidScene(data)) plan = data;
+    } catch { /* backend not running: use the built-in generator */ }
+    plan ??= generateAlgorithmicPlan(brief);
+    onLoadGeneratedPlan?.(plan);
+    return `Loaded a starter with ${plan.rooms.length} rooms and ${plan.walls.length} walls.`;
   }
 
   return (
     <aside className="sk-panel" aria-label="Render and design panel">
       {/* ── Subpanel Tab Navigation ── */}
       <div className="sk-tabs" role="group" aria-label="Panel sections">
-        {([["render", "Render"], ["ai-gen", "AI Plan"], ["materials", "Materials"], ["cameras", "Cameras"]] as const).map(([id, label]) => (
+        {([["render", "Render"], ["ai-gen", "AI JSON"], ["materials", "Materials"], ["cameras", "Cameras"]] as const).map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -504,160 +468,14 @@ export function RenderPanel({
         </>
       )}
 
-      {/* ── TAB 2: AI FLOOR PLAN GENERATOR (Feature F) ── */}
+      {/* ── TAB 2: AI JSON → SKETCH ── */}
       {activeTab === "ai-gen" && (
-        <div className="sk-panel-section">
-          <div className="sk-panel-heading">
-            <span className="sk-panel-eyebrow">Layout starter</span>
-            <h2 className="sk-panel-title">Text to Floor Plan</h2>
-          </div>
-          <p style={{ fontSize: "12px", color: "#a0a595", marginBottom: "8px" }}>
-            Start with a studio, two-bedroom flat, or office template. These layouts are selected from keywords; refine the geometry with the drawing tools.
-          </p>
-
-          <textarea
-            className="sk-textarea"
-            value={aiPrompt}
-            onChange={(e) => setAiPrompt(e.target.value)}
-            placeholder="e.g. Modern 2-bedroom apartment with open-plan kitchen, master ensuite, and large balcony..."
-            rows={4}
-            aria-label="Floor plan generation prompt"
-          />
-
-          <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
-            <button
-              type="button"
-              className="sk-render-btn"
-              style={{ width: "100%" }}
-              disabled={aiGenStatus === "generating" || !aiPrompt.trim()}
-              onClick={handleGeneratePlan}
-            >
-              {aiGenStatus === "generating" ? "Generating Plan…" : "Generate Plan"}
-              <span>⚡</span>
-            </button>
-          </div>
-
-          {aiGenMsg && (
-            <p
-              style={{
-                fontSize: "12px",
-                marginTop: "8px",
-                color: aiGenStatus === "error" ? "#ff7070" : "#a9c93a",
-              }}
-              role="alert"
-            >
-              {aiGenMsg}
-            </p>
-          )}
-
-          <div style={{ marginTop: "16px", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "12px" }}>
-            <p style={{ fontSize: "11px", color: "#888", marginBottom: "6px" }}>Quick prompt ideas:</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <button
-                type="button"
-                className="sk-tool-btn"
-                style={{ fontSize: "11px", padding: "4px 8px", textAlign: "left", height: "auto" }}
-                onClick={() => setAiPrompt("Scandinavian 2-bedroom flat with open kitchen and reading nook")}
-              >
-                2-bedroom flat with open kitchen
-              </button>
-              <button
-                type="button"
-                className="sk-tool-btn"
-                style={{ fontSize: "11px", padding: "4px 8px", textAlign: "left", height: "auto" }}
-                onClick={() => setAiPrompt("Modern creative open-plan office with conference room")}
-              >
-                Creative office with conference room
-              </button>
-              <button
-                type="button"
-                className="sk-tool-btn"
-                style={{ fontSize: "11px", padding: "4px 8px", textAlign: "left", height: "auto" }}
-                onClick={() => setAiPrompt("Minimalist studio apartment with bedroom zone and balcony")}
-              >
-                Minimalist studio apartment
-              </button>
-            </div>
-          </div>
-        </div>
+        <AiJsonPanel onBuild={project => onBuildProject?.(project) ?? false} onGetProject={onGetProject} onStarter={onLoadGeneratedPlan ? handleGeneratePlan : undefined} />
       )}
 
-      {/* ── TAB 3: MATERIALS & TEXTURES (Feature D) ── */}
+      {/* ── TAB 3: MATERIALS & TEXTURES ── */}
       {activeTab === "materials" && (
-        <div className="sk-panel-section">
-          <div className="sk-panel-heading">
-            <span className="sk-panel-eyebrow">Asset Library</span>
-            <h2 className="sk-panel-title">Materials & Finishes</h2>
-          </div>
-
-          {sceneData && sceneData.rooms.length > 0 ? (
-            <>
-              <label className="sk-field-label">
-                Target Room
-                <select
-                  className="sk-select"
-                  value={selectedRoomId}
-                  onChange={(e) => setSelectedRoomId(e.target.value)}
-                  aria-label="Select target room for material"
-                >
-                  {sceneData.rooms.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name} ({r.w}×{r.d}m)</option>
-                  ))}
-                </select>
-              </label>
-
-              <p style={{ fontSize: "12px", color: "#a0a595", marginTop: "10px", marginBottom: "6px" }}>
-                Floor Textures (PBR procedural mapping):
-              </p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
-                {BUILTIN_MATERIALS.filter((m) => m.category === "floor").map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className="sk-tool-btn"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      padding: "6px",
-                      fontSize: "11px",
-                      textAlign: "left",
-                    }}
-                    onClick={() => onApplyRoomMaterial && onApplyRoomMaterial(selectedRoomId, m.id)}
-                  >
-                    <span
-                      style={{
-                        width: "18px",
-                        height: "18px",
-                        borderRadius: "4px",
-                        backgroundColor: m.previewColor ?? "#aaa",
-                        border: "1px solid rgba(255,255,255,0.2)",
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span>{m.name}</span>
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ marginTop: "14px" }}>
-                <p style={{ fontSize: "11px", color: "#a0a595", marginBottom: "4px" }}>
-                  Upload Custom Surface Texture:
-                </p>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleCustomTextureUpload}
-                  style={{ fontSize: "11px", color: "#ccc" }}
-                />
-              </div>
-            </>
-          ) : (
-            <p style={{ fontSize: "12px", color: "#999" }}>
-              Draw at least one room on the canvas using the Room tool (R) to apply floor textures.
-            </p>
-          )}
-        </div>
+        <MaterialsPanel engine={engine ?? null} scene={sceneData} materials={engine?.getMaterials() ?? []} selectedWallId={selectedWallId} selectedRoomId={selectedRoomId} />
       )}
 
       {/* ── TAB 4: VIRTUAL CAMERAS (Feature G) ── */}

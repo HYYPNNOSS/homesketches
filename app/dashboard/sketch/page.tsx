@@ -22,7 +22,10 @@ import type {
   FloorLevel,
   GizmoMode,
   VirtualCamera,
+  Project,
+  Item,
 } from "../../../components/sketch-space/types";
+import { BUILTIN_MATERIALS, FURNITURE_SIZES, FURNITURE_HEIGHTS, itemSize } from "../../../components/sketch-space/types";
 
 // ── Selection inspector (shown in the design panel) ─────────────────────────
 
@@ -98,7 +101,9 @@ function ContextualToolbar({
   onCameraFov,
   onDelete,
   onDismiss,
+  engine,
 }: {
+  engine: SketchEngine | null;
   menu: ContextMenu;
   scene: Scene | null;
   onRotate?: () => void;
@@ -129,7 +134,7 @@ function ContextualToolbar({
     camera: "camera",
   };
   const typeTitles: Record<string, string> = {
-    item: selectedItem ? cap(selectedItem.kind) : "Furniture Item",
+    item: selectedItem ? (selectedItem.name ?? cap(selectedItem.kind)) : "Furniture Item",
     wall: "Wall Section",
     opening: selectedOpening ? cap(selectedOpening.type) : "Wall Opening",
     camera: selectedCamera?.name ?? "Virtual Camera",
@@ -151,6 +156,34 @@ function ContextualToolbar({
       </header>
 
       <div className="sk-ctx-body">
+        {menu.type === "item" && selectedItem && engine && (() => {
+          const [w, d] = itemSize(selectedItem);
+          const up = (u: Partial<Item>) => engine.updateItem(selectedItem.id, u);
+          return (
+            <>
+              <label className="sk-insp-field"><span>Name</span><input key={selectedItem.id} defaultValue={selectedItem.name ?? ""} placeholder={cap(selectedItem.kind)} maxLength={80} aria-label="Item name" onBlur={e => { const v = e.target.value.trim(); if (v !== (selectedItem.name ?? "")) up({ name: v || undefined }); }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /></label>
+              <div className="sk-insp-grid">
+                <NumberField label="X" value={selectedItem.x} min={-500} max={500} step={0.05} onCommit={x => up({ x })} />
+                <NumberField label="Z" value={selectedItem.z} min={-500} max={500} step={0.05} onCommit={z => up({ z })} />
+                <NumberField label="Rotation" unit="°" value={+((((selectedItem.rot * 180 / Math.PI) % 360) + 360) % 360).toFixed(1)} min={-360} max={360} step={5} onCommit={deg => up({ rot: deg * Math.PI / 180 })} />
+                {selectedItem.kind !== "label" && <>
+                  <NumberField label="Width" value={w} min={0.05} max={30} step={0.05} onCommit={v => up({ w: v === FURNITURE_SIZES[selectedItem.kind][0] ? undefined : v })} />
+                  <NumberField label="Depth" value={d} min={0.01} max={30} step={0.05} onCommit={v => up({ d: v === FURNITURE_SIZES[selectedItem.kind][1] ? undefined : v })} />
+                  <NumberField label="Height" value={selectedItem.h ?? FURNITURE_HEIGHTS[selectedItem.kind]} min={0.005} max={10} step={0.05} onCommit={v => up({ h: v === FURNITURE_HEIGHTS[selectedItem.kind] ? undefined : v })} />
+                </>}
+              </div>
+              {selectedItem.kind !== "label" && (
+                <label className="sk-insp-field"><span>Finish colour</span>
+                  <span className="sk-insp-range">
+                    <input type="color" aria-label="Item colour" value={`#${(selectedItem.color ?? 0x8a9a6a).toString(16).padStart(6, "0")}`} onChange={e => up({ color: parseInt(e.target.value.slice(1), 16) })} />
+                    {selectedItem.color !== undefined && <button type="button" className="sk-ctx-btn" onClick={() => up({ color: undefined })}>Reset</button>}
+                  </span>
+                </label>
+              )}
+            </>
+          );
+        })()}
+
         {menu.type === "item" && selectedItem && onScaleChange && (
           <label className="sk-insp-field">
             <span>Scale</span>
@@ -171,7 +204,25 @@ function ContextualToolbar({
             <div className="sk-insp-grid">
               {onWallHeight && <NumberField label="Height" value={selectedWall.height ?? 2.7} min={1} max={5} step={0.1} onCommit={onWallHeight} />}
               {onWallThickness && <NumberField label="Thickness" value={selectedWall.thickness ?? 0.15} min={0.05} max={0.6} step={0.01} onCommit={onWallThickness} />}
+              {engine && <NumberField label="Length" value={+wallLength.toFixed(3)} min={0.1} max={500} step={0.05} onCommit={len => engine.setWallLength(selectedWall.id, len)} />}
             </div>
+            {engine && (
+              <div className="sk-insp-grid">
+                <NumberField label="Start X" value={selectedWall.a[0]} min={-500} max={500} step={0.05} onCommit={x => engine.setWallEndpoint(selectedWall.id, "a", [x, selectedWall.a[1]])} />
+                <NumberField label="Start Z" value={selectedWall.a[1]} min={-500} max={500} step={0.05} onCommit={z => engine.setWallEndpoint(selectedWall.id, "a", [selectedWall.a[0], z])} />
+                <NumberField label="End X" value={selectedWall.b[0]} min={-500} max={500} step={0.05} onCommit={x => engine.setWallEndpoint(selectedWall.id, "b", [x, selectedWall.b[1]])} />
+                <NumberField label="End Z" value={selectedWall.b[1]} min={-500} max={500} step={0.05} onCommit={z => engine.setWallEndpoint(selectedWall.id, "b", [selectedWall.b[0], z])} />
+              </div>
+            )}
+            {engine && (
+              <label className="sk-insp-field"><span>Texture</span>
+                <select className="sk-select" aria-label="Wall texture" value={selectedWall.materialId ?? ""} onChange={e => engine.applyMaterial({ kind: "wall", id: selectedWall.id }, e.target.value || undefined)}>
+                  <option value="">Plain colour</option>
+                  {engine.getMaterials().map(m => <option key={m.id} value={m.id}>{m.name} (imported)</option>)}
+                  {BUILTIN_MATERIALS.filter(m => m.category !== "floor").map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </label>
+            )}
             {onWallColor && (
               <div className="sk-insp-field">
                 <span>Finish</span>
@@ -193,6 +244,23 @@ function ContextualToolbar({
             )}
           </>
         )}
+
+        {menu.type === "opening" && selectedOpening && (() => {
+          const wall = scene?.walls.find(w => w.id === selectedOpening.wallId);
+          if (!wall || !engine) return null;
+          const L = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]) || 1;
+          const offset = Math.hypot(selectedOpening.at[0] - wall.a[0], selectedOpening.at[1] - wall.a[1]) - selectedOpening.w / 2;
+          return (
+            <div className="sk-insp-grid">
+              <NumberField label="From wall start" value={+offset.toFixed(3)} min={0} max={Math.max(0, L - selectedOpening.w)} step={0.05} onCommit={o => { const t = (o + selectedOpening.w / 2) / L; engine.updateOpening(selectedOpening.id, { at: [wall.a[0] + (wall.b[0] - wall.a[0]) * t, wall.a[1] + (wall.b[1] - wall.a[1]) * t] }); }} />
+              <label className="sk-insp-field"><span>Type</span>
+                <select className="sk-select" aria-label="Opening type" value={selectedOpening.type} onChange={e => engine.updateOpening(selectedOpening.id, { type: e.target.value as "door" | "window", h: undefined, sillHeight: undefined })}>
+                  <option value="door">Door</option><option value="window">Window</option>
+                </select>
+              </label>
+            </div>
+          );
+        })()}
 
         {menu.type === "opening" && selectedOpening && (
           <div className="sk-insp-grid">
@@ -475,7 +543,7 @@ export default function SketchSpacePage() {
 
   const handleContextWallColor = useCallback((color: number) => {
     if (!contextMenu || contextMenu.type !== "wall") return;
-    engineRef.current?.updateWall(contextMenu.id, { color });
+    engineRef.current?.updateWall(contextMenu.id, { color, materialId: undefined });
   }, [contextMenu]);
 
   const handleContextOpeningWidth = useCallback((w: number) => {
@@ -576,9 +644,6 @@ export default function SketchSpacePage() {
   }, []);
 
   // ── Materials & Virtual Cameras handlers (Features D & G) ──────────────────
-  const handleApplyRoomMaterial = useCallback((roomId: string, materialId: string) => {
-    engineRef.current?.updateRoom(roomId, { materialId });
-  }, []);
 
   const handleAddVirtualCamera = useCallback(() => {
     const eng = engineRef.current;
@@ -632,6 +697,16 @@ export default function SketchSpacePage() {
     }
     engineRef.current?.loadScene(generatedScene);
   }, [sceneData]);
+
+  const handleBuildProject = useCallback((project: Project): boolean => {
+    const eng = engineRef.current;
+    if (!eng) return false;
+    const current = eng.getProject();
+    const hasContent = current.floors.some(f => f.scene.walls.length || f.scene.rooms.length || f.scene.items.length);
+    if (hasContent && !window.confirm("Build this JSON?\n\nIt replaces the current design (all floors). You can undo with Ctrl+Z.")) return false;
+    try { eng.replaceProject(project); setPageNotice(""); return true; }
+    catch (e) { setPageNotice(e instanceof Error ? e.message : "Could not build this JSON."); return false; }
+  }, []);
 
   // ── Send to workspace cards ───────────────────────────────────────────────
   const handleSendToFloorPlan = useCallback(async () => {
@@ -778,7 +853,7 @@ export default function SketchSpacePage() {
               <span>Design panel</span>
               <button type="button" className="sk-nav-icon" aria-label="Hide design panel" onClick={() => setPanelOpen(false)}><SkIcon name="close" size={14} /></button>
             </div>
-            {selectedRoom && <RoomProperties room={selectedRoom} onUpdate={updates => engine?.updateRoom(selectedRoom.id, updates)} onDelete={handleContextDelete} onDismiss={() => setContextMenu(null)} />}
+            {selectedRoom && <RoomProperties room={selectedRoom} onMove={(dx, dz) => engine?.moveSelection(dx, dz)} onUpdate={updates => engine?.updateRoom(selectedRoom.id, updates)} onDelete={handleContextDelete} onDismiss={() => setContextMenu(null)} />}
             {contextMenu && contextMenu.type !== "room" && isSelecting && (
               <ContextualToolbar
                 menu={contextMenu}
@@ -797,6 +872,7 @@ export default function SketchSpacePage() {
                 onCameraFov={(fov) => engineRef.current?.updateVirtualCamera(contextMenu.id, { fov })}
                 onDelete={handleContextDelete}
                 onDismiss={() => setContextMenu(null)}
+                engine={engine}
               />
             )}
             <RenderPanel
@@ -813,13 +889,16 @@ export default function SketchSpacePage() {
               isRecording={isRecording}
               onSendToFloorPlan={handleSendToFloorPlan}
               onSendTo3D={handleSendTo3D}
-              onApplyRoomMaterial={handleApplyRoomMaterial}
               onAddVirtualCamera={handleAddVirtualCamera}
               onSwitchCamera={handleSwitchCamera}
               onCaptureCamera={handleCaptureCamera}
               onDeleteCamera={handleDeleteCamera}
               onUpdateCamera={handleUpdateCamera}
               onLoadGeneratedPlan={handleLoadGeneratedPlan}
+              onBuildProject={handleBuildProject}
+              engine={engine}
+              selectedWallId={contextMenu?.type === "wall" ? contextMenu.id : undefined}
+              selectedRoomId={contextMenu?.type === "room" ? contextMenu.id : undefined}
             />
           </div>
         </div>

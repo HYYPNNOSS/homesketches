@@ -55,8 +55,18 @@ try{
  const svg=page.waitForEvent('download');await page.getByRole('button',{name:'Export vector SVG floor plan',exact:true}).click();const vector=await readFile(await (await svg).path(),'utf8');assert.ok(vector.includes('rotate(45'));assert.ok(vector.includes('Living &amp; dining'));
  console.log('PASS GLB exports both floors; SVG preserves furniture rotation and labels');
  await page.setViewportSize({width:800,height:1100});assert.equal(await page.locator('.sk-design-panel').isVisible(),false);await page.getByRole('button',{name:'Render & design',exact:true}).click();assert.equal(await page.locator('.sk-design-panel').isVisible(),true);
- await page.getByRole('button',{name:'Materials',exact:true}).click();await page.locator('.sk-design-panel input[type=file]').setInputFiles({name:'surface.png',mimeType:'image/png',buffer:await readFile(new URL('../public/logo.png',import.meta.url))});
- await page.waitForTimeout(300);assert.ok((await exported()).floors.find(f=>f.id==='ground').scene.rooms[0].materialId.startsWith('data:image/png'));
+ await page.getByRole('button',{name:'Materials',exact:true}).click();
+ const target=page.getByLabel('Material target');await target.selectOption({label:(await target.locator('option',{hasText:'— floor'}).first().textContent()).trim()});
+ await page.locator('.sk-design-panel [data-material="oak-wood"]').click();await page.waitForTimeout(200);assert.equal((await exported()).floors.find(f=>f.id==='ground').scene.rooms[0].materialId,'oak-wood');
+ await page.locator('.sk-mat-import summary').click();await page.getByLabel('Colour texture image').setInputFiles({name:'surface.png',mimeType:'image/png',buffer:await readFile(new URL('../public/logo.png',import.meta.url))});
+ await page.getByRole('button',{name:'Import and apply',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.sk-mat.active [data-material^="custom-"]'));
+ let textured=await exported();assert.equal(textured.materials.length,1);assert.ok(/^data:image\/(webp|jpeg)/.test(textured.materials[0].albedo));assert.equal(textured.floors.find(f=>f.id==='ground').scene.rooms[0].materialId,textured.materials[0].id);
+ console.log('PASS procedural and imported PBR textures');
+ await page.getByRole('button',{name:'AI JSON',exact:true}).click();await page.getByRole('button',{name:'Load example',exact:true}).click();await page.getByText(/^Ready: 5 rooms/).waitFor();
+ await page.getByRole('button',{name:'Build in Sketch',exact:false}).click();await page.getByText(/^Built 5 rooms/).waitFor();
+ const built=await exported();const bs=built.floors[0].scene;assert.equal(built.floors.length,1);assert.equal(bs.rooms.length,5);assert.equal(bs.openings.length,8);assert.ok(bs.walls.length>=12);assert.ok(bs.walls.some(w=>w.materialId==='subway-tile'));assert.ok(bs.openings.every(o=>bs.walls.some(w=>w.id===o.wallId)));
+ await page.getByRole('button',{name:'Undo (Ctrl+Z)',exact:true}).click();assert.equal((await exported()).floors.length,2);
+ console.log('PASS AI JSON builds a full plan and is undoable');
 
  await page.getByRole('button',{name:'New',exact:true}).click();await nameIs('Untitled Project');
  await page.getByRole('button',{name:'Enclosed room, shortcut R',exact:true}).click();await clickWorld(-2,-2);await clickWorld(2,2);

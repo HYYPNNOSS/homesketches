@@ -1224,3 +1224,37 @@
   .studio-shell.folded .studio-nav a { padding: 0 10px; }
   .studio-shell.folded [data-tooltip]:hover::after { display: none; }
 }
+
+/* ── AI JSON → Sketch panel ─────────────────────────────────────────────── */
+.sk-ai-steps { display: grid; gap: 14px; margin: 4px 0 0; padding: 0; list-style: none; counter-reset: sk-step; }
+.sk-ai-steps > li { display: grid; gap: 8px; counter-increment: sk-step; }
+.sk-ai-steps > li > strong { display: flex; align-items: center; gap: 8px; color: var(--sk-ink); font-size: 12px; }
+.sk-ai-steps > li > strong::before { content: counter(sk-step); display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--sk-dark); color: var(--sk-lime); font-size: 10px; font-weight: 800; }
+.sk-ai-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.sk-ai-btn { padding: 6px 10px; border: 1px solid var(--sk-line-2); border-radius: 6px; background: #fff; color: var(--sk-ink-2); font-size: 12px; font-weight: 600; cursor: pointer; }
+.sk-ai-btn:hover:not(:disabled) { background: var(--sk-paper-2); }
+.sk-ai-btn:disabled { opacity: .5; cursor: not-allowed; }
+.sk-ai-primary { border-color: var(--sk-dark); background: var(--sk-dark); color: var(--sk-lime); }
+.sk-ai-primary:hover:not(:disabled) { background: #2c3122; }
+.sk-json-area { min-height: 180px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; overflow: auto; tab-size: 2; }
+.sk-ai-status p { margin: 0; font-size: 12px; }
+.sk-ai-ok { color: var(--sk-olive); font-weight: 600; }
+.sk-ai-error { color: var(--sk-danger); }
+.sk-ai-warnings { margin: 6px 0 0; padding-left: 16px; color: #8a6a1f; font-size: 11px; line-height: 1.45; }
+.sk-ai-note { margin: 10px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--sk-paper-2); color: var(--sk-ink-2); font-size: 12px; line-height: 1.45; }
+.sk-ai-starter { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--sk-line); font-size: 12px; color: var(--sk-muted); }
+.sk-ai-starter summary, .sk-mat-more summary, .sk-mat-import summary { cursor: pointer; font-weight: 600; color: var(--sk-ink-2); font-size: 12px; margin-bottom: 8px; }
+
+/* ── Materials panel ────────────────────────────────────────────────────── */
+.sk-mat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin: 10px 0; }
+.sk-mat { position: relative; }
+.sk-mat-pick { display: grid; gap: 4px; width: 100%; padding: 4px; border: 1px solid var(--sk-line); border-radius: 8px; background: #fff; cursor: pointer; text-align: left; transition: border-color .15s, box-shadow .15s; }
+.sk-mat-pick:hover { border-color: var(--sk-line-2); box-shadow: var(--sk-shadow); }
+.sk-mat.active .sk-mat-pick { border-color: var(--sk-olive); box-shadow: 0 0 0 2px rgba(103,123,48,.25); }
+.sk-mat-thumb { display: block; aspect-ratio: 1; border-radius: 5px; background-size: cover; background-position: center; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
+.sk-mat-name { overflow: hidden; color: var(--sk-ink-2); font-size: 10.5px; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.sk-mat-remove { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(30,33,24,.75); color: #fff; font-size: 13px; line-height: 1; cursor: pointer; }
+.sk-mat-hint { margin: 6px 0; color: var(--sk-muted); font-size: 11px; line-height: 1.45; }
+.sk-mat-more, .sk-mat-import { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--sk-line); }
+.sk-mat-import { display: grid; gap: 8px; }
+.sk-mat-import input[type=file] { max-width: 100%; font-size: 11px; }

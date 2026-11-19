@@ -10,6 +10,8 @@ import { workspaceOwner } from "../../lib/workspace-store";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { MaterialLibrary, applyWorldUVs } from "./material-library";
 import {
   Scene,
   TraceReference,
@@ -26,8 +28,9 @@ import {
   FloorLevel,
   Project,
   GizmoMode,
-  MaterialPreset,
-  BUILTIN_MATERIALS,
+  CustomMaterial,
+  itemSize,
+  FURNITURE_HEIGHTS,
   activeFloor,
   emptyScene,
   emptyProject,
@@ -107,95 +110,6 @@ function wallMid(wall: Wall): Vec2 {
   return [(wall.a[0] + wall.b[0]) / 2, (wall.a[1] + wall.b[1]) / 2];
 }
 
-function createProceduralTexture(id: string): THREE.Texture {
-  if (typeof document === "undefined") return new THREE.Texture();
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return new THREE.Texture();
-
-  if (id === "oak-wood" || id === "warm-wood-panel") {
-    ctx.fillStyle = id === "oak-wood" ? "#c89d66" : "#8d6446";
-    ctx.fillRect(0, 0, 512, 512);
-    ctx.strokeStyle = id === "oak-wood" ? "#ab7e48" : "#6f4d34";
-    ctx.lineWidth = 3;
-    for (let y = 0; y < 512; y += 48) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(512, y);
-      ctx.stroke();
-    }
-    ctx.fillStyle = "rgba(100,60,30,0.06)";
-    for (let i = 0; i < 300; i++) {
-      ctx.fillRect(Math.random() * 512, Math.random() * 512, Math.random() * 60 + 10, 1.5);
-    }
-  } else if (id === "polished-concrete") {
-    ctx.fillStyle = "#9ca3af";
-    ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 2000; i++) {
-      const g = Math.floor(Math.random() * 70 + 130);
-      ctx.fillStyle = `rgba(${g},${g},${g},0.15)`;
-      ctx.fillRect(Math.random() * 512, Math.random() * 512, 2, 2);
-    }
-  } else if (id === "marble-tile") {
-    ctx.fillStyle = "#f3f4f6";
-    ctx.fillRect(0, 0, 512, 512);
-    ctx.strokeStyle = "rgba(170, 175, 185, 0.4)";
-    ctx.lineWidth = 2.5;
-    for (let i = 0; i < 6; i++) {
-      ctx.beginPath();
-      ctx.moveTo(Math.random() * 512, 0);
-      ctx.bezierCurveTo(Math.random() * 512, 160, Math.random() * 512, 360, Math.random() * 512, 512);
-      ctx.stroke();
-    }
-  } else if (id === "slate-tile") {
-    ctx.fillStyle = "#374151";
-    ctx.fillRect(0, 0, 512, 512);
-    ctx.strokeStyle = "#1f2937";
-    ctx.lineWidth = 4;
-    for (let i = 0; i < 512; i += 128) {
-      ctx.strokeRect(0, i, 512, 128);
-      ctx.strokeRect(i, 0, 128, 512);
-    }
-  } else if (id === "cozy-carpet") {
-    ctx.fillStyle = "#d1c7bd";
-    ctx.fillRect(0, 0, 512, 512);
-    for (let i = 0; i < 3500; i++) {
-      ctx.fillStyle = Math.random() > 0.5 ? "rgba(255,255,255,0.12)" : "rgba(140,130,120,0.15)";
-      ctx.fillRect(Math.random() * 512, Math.random() * 512, 1.5, 1.5);
-    }
-  } else if (id === "exposed-brick") {
-    ctx.fillStyle = "#994d38";
-    ctx.fillRect(0, 0, 512, 512);
-    ctx.strokeStyle = "#ded6d0";
-    ctx.lineWidth = 3;
-    const rowH = 32;
-    const colW = 64;
-    for (let y = 0; y < 512; y += rowH) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(512, y);
-      ctx.stroke();
-      const offset = (Math.floor(y / rowH) % 2) * (colW / 2);
-      for (let x = offset; x < 512; x += colW) {
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x, y + rowH);
-        ctx.stroke();
-      }
-    }
-  } else {
-    ctx.fillStyle = "#f3f4f6";
-    ctx.fillRect(0, 0, 512, 512);
-  }
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const COLORS = {
@@ -217,6 +131,11 @@ const COLORS = {
   snapGuide: 0x3aaa6a,
   canvasBounds: 0x7ab8d4,
   camera: 0xff6b35,
+};
+
+const DEFAULT_ITEM_COLORS: Partial<Record<FurnitureKind, number>> = {
+  sofa: 0x8a9480, bed: 0x9fb0c4, chair: 0x8a9a6a, toilet: 0xf4f3ef, bath: 0xf4f3ef,
+  kitchen: 0xf0efe9, tv: 0x1b1c1e, rug: 0xc9b9a3, wardrobe: 0xb48a5e, table: 0xb48a5e, plant: 0x4f7a46, stairs: 0xb48a5e,
 };
 
 // ─── Main Engine Class ────────────────────────────────────────────────────────
@@ -276,6 +195,8 @@ export class SketchEngine {
 
   // Texture cache
   private textureCache = new Map<string, THREE.Texture>();
+  private materials!: MaterialLibrary;
+  private envMap: THREE.Texture | null = null;
 
   // Tool state
   activeTool: ToolKind = "wall";
@@ -344,6 +265,10 @@ export class SketchEngine {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMappingExposure = 1.0;
+    this.materials = new MaterialLibrary(Math.min(8, this.renderer.capabilities.getMaxAnisotropy()), () => { /* render loop picks up new maps */ });
 
     // Scene
     this.scene3d = new THREE.Scene();
@@ -380,12 +305,27 @@ export class SketchEngine {
       this.cameraMarkerGroup
     );
 
-    // Lights
+    // Lights — image-based lighting (used in 3D views) plus a soft key light.
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      const room = new RoomEnvironment();
+      this.envMap = pmrem.fromScene(room, 0.04).texture;
+      room.dispose(); pmrem.dispose();
+    } catch { this.envMap = null; }
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    const sun = new THREE.DirectionalLight(0xfff8ec, 1.2);
+    ambient.name = "ambient";
+    const hemi = new THREE.HemisphereLight(0xf3f6ff, 0xd9cdb8, 0.0);
+    hemi.name = "hemi";
+    const sun = new THREE.DirectionalLight(0xfff4e2, 1.2);
+    sun.name = "sun";
     sun.position.set(10, 20, 8);
     sun.castShadow = true;
-    this.scene3d.add(ambient, sun);
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -25; sun.shadow.camera.right = 25;
+    sun.shadow.camera.top = 25; sun.shadow.camera.bottom = -25;
+    sun.shadow.camera.near = 1; sun.shadow.camera.far = 80;
+    sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02; sun.shadow.radius = 4;
+    this.scene3d.add(ambient, hemi, sun);
 
     // Grid
     this.buildGrid();
@@ -456,6 +396,8 @@ export class SketchEngine {
     this.releaseGroup(this.scene3d);
     this.textureCache.forEach(texture => texture.dispose());
     this.textureCache.clear();
+    this.materials.dispose();
+    this.envMap?.dispose();
     this.renderer.dispose();
     this.listeners.clear();
     this.canvas.removeEventListener("pointerdown", this.onPointerDown);
@@ -750,7 +692,9 @@ export class SketchEngine {
     } else if (mode === "perspective") {
       this.camera = this.perspCamera;
       const fromPos = this.perspCamera.position.clone();
-      const toPos = new THREE.Vector3(8, 8, 12);
+      // Look down steeply enough (~57°) that 2.7 m walls don't hide the floors.
+      const cbv = this.getCanvasBounds(), r = Math.max(8, Math.max(cbv.widthM, cbv.depthM));
+      const toPos = new THREE.Vector3(r * 0.45, r * 1.25, r * 0.7);
       const fromTarget = previousTarget;
       const toTarget = new THREE.Vector3(0, 0, 0);
       this.scene3d.background = new THREE.Color(0xd8e4f0);
@@ -775,11 +719,26 @@ export class SketchEngine {
         this.perspCamera.position.copy(toPos);
       }
     }
+    this.applyLighting(mode);
     this.onResize();
     if (prevMode !== mode) {
       this.rebuildScene();
     }
     this.emit("view-change", mode);
+  }
+
+  /** 2D keeps the flat drafting look; 3D views get tone mapping + IBL. */
+  private applyLighting(mode: ViewMode) {
+    const flat = mode === "top";
+    const ambient = this.scene3d.getObjectByName("ambient") as THREE.AmbientLight | undefined;
+    const hemi = this.scene3d.getObjectByName("hemi") as THREE.HemisphereLight | undefined;
+    const sun = this.scene3d.getObjectByName("sun") as THREE.DirectionalLight | undefined;
+    this.renderer.toneMapping = flat ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+    this.scene3d.environment = flat ? null : this.envMap;
+    this.scene3d.environmentIntensity = 0.55;
+    if (ambient) ambient.intensity = flat ? 0.6 : 0.15;
+    if (hemi) hemi.intensity = flat ? 0 : 0.45;
+    if (sun) sun.intensity = flat ? 1.2 : 2.2;
   }
 
   private rebuildReference() {
@@ -1501,11 +1460,11 @@ export class SketchEngine {
 
   private checkOverlaps(item: Item): boolean {
     if (item.kind === "label") return false;
-    const [w, d] = FURNITURE_SIZES[item.kind];
+    const [w, d] = itemSize(item);
     const sc = item.scale ?? 1.0;
     return this.sceneData.items.some((other) => {
-      if (other.id === item.id || other.kind === "label") return false;
-      const [ow, od] = FURNITURE_SIZES[other.kind];
+      if (other.id === item.id || other.kind === "label" || other.kind === "rug" || item.kind === "rug") return false;
+      const [ow, od] = itemSize(other);
       const osc = other.scale ?? 1.0;
       return (
         Math.abs(item.x - other.x) < (w * sc + ow * osc) / 2 &&
@@ -1574,14 +1533,14 @@ export class SketchEngine {
 
   // ─── 3D scene rebuild ────────────────────────────────────────────────────────
 
-  private getOrCreateTexture(materialId: string, roomId = "shared"): THREE.Texture {
-    const key = `${roomId}:${materialId}`;
-    let tex = this.textureCache.get(key);
+  /** Cached image texture (used for the trace reference underlay). */
+  private getOrCreateTexture(url: string, key = "shared"): THREE.Texture {
+    const id = `${key}:${url.length}:${url.slice(-48)}`;
+    let tex = this.textureCache.get(id);
     if (!tex) {
-      tex = materialId.startsWith("data:image/") ? new THREE.TextureLoader().load(materialId) : createProceduralTexture(materialId);
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex = new THREE.TextureLoader().load(url);
       tex.colorSpace = THREE.SRGBColorSpace;
-      this.textureCache.set(key, tex);
+      this.textureCache.set(id, tex);
     }
     return tex;
   }
@@ -1595,27 +1554,13 @@ export class SketchEngine {
       const mesh = object as THREE.Mesh;
       if (mesh.geometry) geometries.add(mesh.geometry);
       if (mesh.material) for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        if (this.materials?.owns(material)) continue; // shared library material
         materials.add(material);
         for (const value of Object.values(material)) if (value instanceof THREE.Texture && !cached.has(value)) textures.add(value);
       }
     });
     geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); textures.forEach(t => t.dispose());
     group.clear();
-  }
-
-  private getMaterialRepeat(materialId: string): number {
-    const preset = BUILTIN_MATERIALS.find((m) => m.id === materialId);
-    return preset?.repeatPerMetre ?? 1.0;
-  }
-
-  private getMaterialRoughness(materialId: string): number {
-    const preset = BUILTIN_MATERIALS.find((m) => m.id === materialId);
-    return preset?.roughness ?? 0.5;
-  }
-
-  private getMaterialMetalness(materialId: string): number {
-    const preset = BUILTIN_MATERIALS.find((m) => m.id === materialId);
-    return preset?.metalness ?? 0.0;
   }
 
   private updateGizmoAttachment() {
@@ -1691,6 +1636,7 @@ export class SketchEngine {
   // ─── 3D scene rebuild ────────────────────────────────────────────────────────
 
   rebuildScene() {
+    this.materials.setCustomMaterials(this.projectData.materials);
     this.selectionIds = new Set(this.effectiveSelection().map(o=>o.id));
     this.rebuildReference();
     this.releaseGroup(this.wallGroup);
@@ -1831,128 +1777,62 @@ export class SketchEngine {
       return;
     }
 
-    const wallColor = wall.color ?? COLORS.wallSide;
-    const mat = new THREE.MeshLambertMaterial({ color: wallColor });
+    const mat: THREE.Material = this.materials.get(wall.materialId)
+      ?? new THREE.MeshStandardMaterial({ color: wall.color ?? COLORS.wallSide, roughness: 0.88, metalness: 0 });
 
-    // Openings on this wall (Feature C.5: split-geometry cutouts)
+    // One box per solid piece of wall; UVs are in metres along the wall, so
+    // textures continue across segments, sills and headers.
+    const addPiece = (start: number, length: number, base: number, height: number) => {
+      if (length <= 0.005 || height <= 0.005) return;
+      const geo = applyWorldUVs(new THREE.BoxGeometry(length, height, thick), length, height, thick, start, base);
+      const mesh = new THREE.Mesh(geo, mat);
+      const at = start + length / 2;
+      mesh.rotation.y = angle;
+      mesh.position.set(wall.a[0] + dir.x * at, yOffset + base + height / 2, wall.a[1] + dir.z * at);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.name = `wall-${wall.id}`;
+      this.wallGroup.add(mesh);
+    };
+
+    // Openings on this wall (split-geometry cutouts)
+    const dx = wall.b[0] - wall.a[0];
+    const dz = wall.b[1] - wall.a[1];
     const wallOpenings = this.sceneData.openings.filter((o) => {
       if (o.wallId === wall.id) return true;
-      const dx = wall.b[0] - wall.a[0];
-      const dz = wall.b[1] - wall.a[1];
+      if (o.wallId && this.sceneData.walls.some(w => w.id === o.wallId)) return false;
       const l2 = dx * dx + dz * dz;
       if (l2 === 0) return false;
       const t = ((o.at[0] - wall.a[0]) * dx + (o.at[1] - wall.a[1]) * dz) / l2;
       if (t < -0.05 || t > 1.05) return false;
       const px = wall.a[0] + t * dx;
       const pz = wall.a[1] + t * dz;
-      const dist = Math.hypot(o.at[0] - px, o.at[1] - pz);
-      return dist <= thick + 0.25;
+      return Math.hypot(o.at[0] - px, o.at[1] - pz) <= thick + 0.25;
     });
 
-    if (wallOpenings.length === 0) {
-      // Solid wall
-      const geo = new THREE.BoxGeometry(len, h, thick);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.rotation.y = angle;
-      mesh.position.set(mid[0], yOffset + h / 2, mid[1]);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.wallGroup.add(mesh);
-    } else {
-      // Split geometry cutout
-      const dx = wall.b[0] - wall.a[0];
-      const dz = wall.b[1] - wall.a[1];
-      interface CutoutInterval {
-        sStart: number;
-        sEnd: number;
-        opening: Opening;
-      }
-      const intervals: CutoutInterval[] = [];
-      for (const op of wallOpenings) {
-        const sCenter = ((op.at[0] - wall.a[0]) * dx + (op.at[1] - wall.a[1]) * dz) / len;
-        const halfW = op.w / 2;
-        const sStart = Math.max(0, sCenter - halfW);
-        const sEnd = Math.min(len, sCenter + halfW);
-        if (sEnd > sStart) {
-          intervals.push({ sStart, sEnd, opening: op });
-        }
-      }
-      intervals.sort((a, b) => a.sStart - b.sStart);
+    const intervals = wallOpenings.map(op => {
+      const sCenter = ((op.at[0] - wall.a[0]) * dx + (op.at[1] - wall.a[1]) * dz) / len;
+      return { sStart: Math.max(0, sCenter - op.w / 2), sEnd: Math.min(len, sCenter + op.w / 2), opening: op };
+    }).filter(i => i.sEnd > i.sStart).sort((a, b) => a.sStart - b.sStart);
 
-      let currentS = 0;
-      for (const inv of intervals) {
-        if (inv.sStart - currentS > 0.02) {
-          const segLen = inv.sStart - currentS;
-          const segMid = currentS + segLen / 2;
-          const segGeo = new THREE.BoxGeometry(segLen, h, thick);
-          const segMesh = new THREE.Mesh(segGeo, mat);
-          segMesh.rotation.y = angle;
-          segMesh.position.set(
-            wall.a[0] + dir.x * segMid,
-            yOffset + h / 2,
-            wall.a[1] + dir.z * segMid
-          );
-          segMesh.castShadow = true;
-          segMesh.receiveShadow = true;
-          this.wallGroup.add(segMesh);
-        }
-
-        // Sill & Header panels
-        const openH = inv.opening.h ?? (inv.opening.type === "window" ? 1.2 : h);
-        const sill = inv.opening.sillHeight ?? (inv.opening.type === "window" ? 0.9 : 0);
-        const openLen = inv.sEnd - inv.sStart;
-        const openMid = inv.sStart + openLen / 2;
-        const openPosX = wall.a[0] + dir.x * openMid;
-        const openPosZ = wall.a[1] + dir.z * openMid;
-
-        if (sill > 0.01) {
-          const sillGeo = new THREE.BoxGeometry(openLen, sill, thick);
-          const sillMesh = new THREE.Mesh(sillGeo, mat);
-          sillMesh.rotation.y = angle;
-          sillMesh.position.set(openPosX, yOffset + sill / 2, openPosZ);
-          sillMesh.castShadow = true;
-          sillMesh.receiveShadow = true;
-          this.wallGroup.add(sillMesh);
-        }
-
-        const topRemain = h - (sill + openH);
-        if (topRemain > 0.01) {
-          const headerGeo = new THREE.BoxGeometry(openLen, topRemain, thick);
-          const headerMesh = new THREE.Mesh(headerGeo, mat);
-          headerMesh.rotation.y = angle;
-          headerMesh.position.set(openPosX, yOffset + sill + openH + topRemain / 2, openPosZ);
-          headerMesh.castShadow = true;
-          headerMesh.receiveShadow = true;
-          this.wallGroup.add(headerMesh);
-        }
-
-        currentS = Math.max(currentS, inv.sEnd);
-      }
-
-      // Final segment to wall.b
-      if (len - currentS > 0.02) {
-        const segLen = len - currentS;
-        const segMid = currentS + segLen / 2;
-        const segGeo = new THREE.BoxGeometry(segLen, h, thick);
-        const segMesh = new THREE.Mesh(segGeo, mat);
-        segMesh.rotation.y = angle;
-        segMesh.position.set(
-          wall.a[0] + dir.x * segMid,
-          yOffset + h / 2,
-          wall.a[1] + dir.z * segMid
-        );
-        segMesh.castShadow = true;
-        segMesh.receiveShadow = true;
-        this.wallGroup.add(segMesh);
-      }
+    let currentS = 0;
+    for (const inv of intervals) {
+      if (inv.sStart > currentS) addPiece(currentS, inv.sStart - currentS, 0, h);
+      const from = Math.max(currentS, inv.sStart), openLen = inv.sEnd - from;
+      const openH = inv.opening.h ?? (inv.opening.type === "window" ? 1.2 : 2.1);
+      const sill = inv.opening.sillHeight ?? (inv.opening.type === "window" ? 0.9 : 0);
+      addPiece(from, openLen, 0, Math.min(sill, h));
+      addPiece(from, openLen, sill + openH, h - (sill + openH));
+      currentS = Math.max(currentS, inv.sEnd);
     }
+    addPiece(currentS, len - currentS, 0, h);
 
     // Top edge highlight
     const edgeGeo = new THREE.BoxGeometry(len, 0.04, thick + 0.01);
     const edgeMat = new THREE.MeshBasicMaterial({ color: COLORS.wallTop });
     const edgeMesh = new THREE.Mesh(edgeGeo, edgeMat);
     edgeMesh.rotation.y = angle;
-    edgeMesh.position.set(mid[0], yOffset + h - 0.02, mid[1]);
+    edgeMesh.position.set(mid[0], yOffset + h - 0.012, mid[1]); // sits 8 mm proud of the wall top to avoid z-fighting
     this.wallGroup.add(edgeMesh);
 
     // Selection highlight
@@ -1976,9 +1856,8 @@ export class SketchEngine {
       }
     }
 
-    // Dimension label
-    const dimPos: Vec2 = [mid[0], mid[1]];
-    this.addSceneDim(`${len.toFixed(2)}m`, dimPos, yOffset + 0.3);
+    // Dimension label (plan view only — in 3D it hides the model)
+    if (this.activeView === "top") this.addSceneDim(`${len.toFixed(2)}m`, [mid[0], mid[1]], yOffset + 0.3);
   }
 
   private buildRoom3d(room: Room, yOffset = 0, isGhost = false) {
@@ -1990,15 +1869,9 @@ export class SketchEngine {
         transparent: true,
         opacity: 0.15,
       });
-    } else if (room.materialId) {
-      const tex = this.getOrCreateTexture(room.materialId, room.id);
-      const repeat = this.getMaterialRepeat(room.materialId);
-      tex.repeat.set(room.w * repeat, room.d * repeat);
-      mat = new THREE.MeshStandardMaterial({
-        map: tex,
-        roughness: this.getMaterialRoughness(room.materialId),
-        metalness: this.getMaterialMetalness(room.materialId),
-      });
+    } else if (this.materials.get(room.materialId)) {
+      applyWorldUVs(geo, room.w, 0.02, room.d, 0, 0, [room.x, -room.z - room.d]);
+      mat = this.materials.get(room.materialId)!;
     } else {
       mat = new THREE.MeshBasicMaterial({
         color: COLORS.roomFill,
@@ -2026,28 +1899,64 @@ export class SketchEngine {
 
   private buildOpening3d(opening: Opening, yOffset = 0, isGhost = false) {
     const w = opening.w;
-    const color = opening.type === "door" ? COLORS.door : COLORS.window;
-    const openH = opening.h ?? (opening.type === "window" ? 1.2 : WALL_HEIGHT);
-    const sill = opening.sillHeight ?? (opening.type === "window" ? 0.9 : 0);
-    const geo = new THREE.BoxGeometry(w, openH, WALL_THICKNESS + 0.02);
-    const mat = new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity: isGhost ? 0.2 : 0.65,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    const y = yOffset + sill + openH / 2;
-    mesh.position.set(opening.at[0], y, opening.at[1]);
+    const isDoor = opening.type === "door";
+    const openH = opening.h ?? (isDoor ? 2.1 : 1.2);
+    const sill = opening.sillHeight ?? (isDoor ? 0 : 0.9);
+    const wall = opening.wallId ? this.sceneData.walls.find((x) => x.id === opening.wallId) : undefined;
+    const thick = wall?.thickness ?? WALL_THICKNESS;
+    const group = new THREE.Group();
+    group.name = `opening-${opening.id}`;
+    group.position.set(opening.at[0], yOffset + sill, opening.at[1]);
+    if (wall) { const dir = wallDir(wall); group.rotation.y = Math.atan2(-dir.z, dir.x); }
 
-    if (opening.wallId) {
-      const wall = this.sceneData.walls.find((w) => w.id === opening.wallId);
-      if (wall) {
-        const dir = wallDir(wall);
-        mesh.rotation.y = Math.atan2(-dir.z, dir.x);
+    if (isGhost || this.activeView === "top") {
+      const mat = new THREE.MeshBasicMaterial({ color: isDoor ? COLORS.door : COLORS.window, transparent: true, opacity: isGhost ? 0.2 : 0.65 });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, openH, thick + 0.02), mat);
+      mesh.position.y = openH / 2;
+      group.add(mesh);
+      if (this.isSelected(opening.id) && !isGhost) {
+        const sel = new THREE.Mesh(new THREE.BoxGeometry(w + 0.06, openH + 0.06, thick + 0.08), new THREE.MeshBasicMaterial({ color: COLORS.selected, wireframe: true }));
+        sel.position.y = openH / 2; group.add(sel);
       }
+      this.openingGroup.add(group);
+      return;
     }
 
-    this.openingGroup.add(mesh);
+    // 3D: frame + leaf (door) or frame + mullion + glass (window).
+    const frameMat = new THREE.MeshStandardMaterial({ color: this.isSelected(opening.id) ? COLORS.selected : (isDoor ? 0xe9e4da : 0xf2f2ef), roughness: 0.5 });
+    const f = 0.05, depth = thick + 0.02;
+    const box = (bw: number, bh: number, bd: number, x: number, y: number, z: number, m: THREE.Material) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), m);
+      mesh.position.set(x, y, z); mesh.castShadow = true; mesh.receiveShadow = true; group.add(mesh); return mesh;
+    };
+    box(f, openH, depth, -w / 2 + f / 2, openH / 2, 0, frameMat);
+    box(f, openH, depth, w / 2 - f / 2, openH / 2, 0, frameMat);
+    box(w, f, depth, 0, openH - f / 2, 0, frameMat);
+    if (isDoor) {
+      const leafMat = new THREE.MeshStandardMaterial({ color: this.isSelected(opening.id) ? COLORS.selected : 0xb98a5a, roughness: 0.55 });
+      const leafW = w - 2 * f, leafH = openH - f;
+      const leafGeo = applyWorldUVs(new THREE.BoxGeometry(leafW, leafH, 0.04), leafW, leafH, 0.04);
+      const leaf = new THREE.Mesh(leafGeo, leafMat);
+      // Hinged on the left jamb, shown slightly ajar so the opening reads in 3D.
+      const hinge = new THREE.Group();
+      hinge.position.set(-w / 2 + f, 0, 0);
+      leaf.position.set(leafW / 2, leafH / 2, 0);
+      leaf.castShadow = true; leaf.receiveShadow = true;
+      hinge.add(leaf); hinge.rotation.y = -0.35;
+      const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.14, 12), new THREE.MeshStandardMaterial({ color: 0x8c8c8c, metalness: 0.9, roughness: 0.25 }));
+      handle.rotation.z = Math.PI / 2; handle.position.set(leafW - 0.08, 1.0, 0.04);
+      hinge.add(handle);
+      group.add(hinge);
+    } else {
+      box(w, f, depth, 0, f / 2, 0, frameMat);
+      box(w + 0.06, 0.03, depth + 0.08, 0, -0.015, 0, frameMat); // sill board
+      if (w > 1.0) box(0.04, openH - 2 * f, 0.06, 0, openH / 2, 0, frameMat);
+      const glass = new THREE.MeshPhysicalMaterial({ color: 0xdfeef5, metalness: 0, roughness: 0.05, transmission: 0.9, transparent: true, opacity: 0.35, ior: 1.5, thickness: 0.01, envMapIntensity: 1.2 });
+      const pane = new THREE.Mesh(new THREE.BoxGeometry(w - 2 * f, openH - 2 * f, 0.012), glass);
+      pane.position.y = openH / 2;
+      group.add(pane);
+    }
+    this.openingGroup.add(group);
   }
 
   private buildItem3d(item: Item, yOffset = 0, isGhost = false) {
@@ -2055,82 +1964,117 @@ export class SketchEngine {
       if (!isGhost) this.addSceneDim(item.label ?? "Label", [item.x, item.z], yOffset + 0.3);
       return;
     }
-    const [w, d] = FURNITURE_SIZES[item.kind];
+    const [w0, d0] = FURNITURE_SIZES[item.kind];
+    const [w, d] = itemSize(item);
+    const h0 = FURNITURE_HEIGHTS[item.kind];
     const sc = item.scale ?? 1.0;
-    
+
+    // Outer group: position / rotation / uniform scale (driven by the gizmo).
+    // Inner group: non-uniform fit of the default model to custom w/d/h.
     const group = new THREE.Group();
     group.name = "item-" + item.id;
     group.position.set(item.x, yOffset, item.z);
     group.rotation.y = item.rot;
     group.scale.set(sc, sc, sc);
+    const model = new THREE.Group();
+    model.scale.set(w / w0, item.h ? item.h / h0 : 1, d / d0);
+    group.add(model);
 
     const isSelected = this.isSelected(item.id);
     const hasOverlap = this.checkOverlaps(item);
-    const color = isSelected ? COLORS.selected : COLORS.furniture;
-    const mat = new THREE.MeshLambertMaterial({ color });
+    const flat = this.activeView === "top";
+    const std = (color: number, roughness = 0.7, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness, transparent: isGhost, opacity: isGhost ? 0.3 : 1 });
+    const body = isSelected ? std(COLORS.selected) : flat ? new THREE.MeshLambertMaterial({ color: item.color ?? COLORS.furniture }) : std(item.color ?? DEFAULT_ITEM_COLORS[item.kind] ?? COLORS.furniture, 0.75);
+    const accent = flat ? body : std(0x3b3a37, 0.5);
+    const white = flat ? body : std(0xf4f3ef, 0.25);
+    const wood = flat ? body : (this.materials.get("oak-wood") ?? body);
     const lineMat = new THREE.LineBasicMaterial({ color: COLORS.furnitureEdge });
+    const box = (bw: number, bh: number, bd: number, x: number, y: number, z: number, m: THREE.Material = body) => {
+      const geo = new THREE.BoxGeometry(bw, bh, bd);
+      if (m === wood) applyWorldUVs(geo, bw, bh, bd);
+      const mesh = new THREE.Mesh(geo, m);
+      mesh.position.set(x, y, z); mesh.castShadow = !isGhost; mesh.receiveShadow = true;
+      model.add(mesh);
+      if (flat) { const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), lineMat); e.position.copy(mesh.position); model.add(e); }
+      return mesh;
+    };
+    const cyl = (r: number, hgt: number, x: number, y: number, z: number, m: THREE.Material = body, r2 = r) => {
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r2, hgt, 24), m);
+      mesh.position.set(x, y, z); mesh.castShadow = !isGhost; model.add(mesh); return mesh;
+    };
+    const legs = (lw: number, ld: number, lh: number, t = 0.04, m: THREE.Material = accent) => {
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(t, lh, t, sx * (lw / 2 - t), lh / 2, sz * (ld / 2 - t), m);
+    };
 
-    if (item.kind === "sofa") {
-      // Base
-      const baseGeo = new THREE.BoxGeometry(w, 0.4, d);
-      const baseMesh = new THREE.Mesh(baseGeo, mat);
-      baseMesh.position.y = 0.2;
-      group.add(baseMesh);
-      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(baseGeo), lineMat).translateY(0.2));
-      
-      // Backrest
-      const backGeo = new THREE.BoxGeometry(w, 0.4, 0.2);
-      const backMesh = new THREE.Mesh(backGeo, mat);
-      backMesh.position.set(0, 0.6, -d/2 + 0.1);
-      group.add(backMesh);
-      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(backGeo), lineMat).translateX(0).translateY(0.6).translateZ(-d/2 + 0.1));
-      
-      // Armrests
-      const armGeo = new THREE.BoxGeometry(0.2, 0.6, d);
-      const arm1 = new THREE.Mesh(armGeo, mat);
-      arm1.position.set(-w/2 + 0.1, 0.3, 0);
-      group.add(arm1);
-      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(armGeo), lineMat).translateX(-w/2 + 0.1).translateY(0.3));
-
-      const arm2 = new THREE.Mesh(armGeo, mat);
-      arm2.position.set(w/2 - 0.1, 0.3, 0);
-      group.add(arm2);
-      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(armGeo), lineMat).translateX(w/2 - 0.1).translateY(0.3));
-    } else if (item.kind === "bed") {
-      // Base
-      const baseGeo = new THREE.BoxGeometry(w, 0.3, d);
-      const baseMesh = new THREE.Mesh(baseGeo, mat);
-      baseMesh.position.y = 0.15;
-      group.add(baseMesh);
-      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(baseGeo), lineMat).translateY(0.15));
-
-      // Headboard
-      const headGeo = new THREE.BoxGeometry(w, 0.8, 0.1);
-      const headMesh = new THREE.Mesh(headGeo, mat);
-      headMesh.position.set(0, 0.4, -d/2 + 0.05);
-      group.add(headMesh);
-      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(headGeo), lineMat).translateY(0.4).translateZ(-d/2 + 0.05));
-    } else {
-      // Fallback
-      const h = item.kind === "stairs" ? 1.4 : 0.75;
-      const geo = new THREE.BoxGeometry(w, h, d);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.y = h / 2;
-      group.add(mesh);
-
-      const edges = new THREE.EdgesGeometry(geo);
-      const line = new THREE.LineSegments(edges, lineMat);
-      line.position.y = h / 2;
-      group.add(line);
+    switch (item.kind) {
+      case "sofa":
+        box(w0, 0.22, d0, 0, 0.17, 0); legs(w0, d0, 0.06);
+        box(w0 - 0.4, 0.16, d0 - 0.25, 0, 0.36, 0.1); // seat cushions
+        box(w0, 0.45, 0.2, 0, 0.5, -d0 / 2 + 0.1);
+        box(0.2, 0.35, d0, -w0 / 2 + 0.1, 0.45, 0); box(0.2, 0.35, d0, w0 / 2 - 0.1, 0.45, 0);
+        break;
+      case "bed":
+        box(w0, 0.25, d0, 0, 0.2, 0, wood); legs(w0, d0, 0.08);
+        box(w0 - 0.06, 0.2, d0 - 0.1, 0, 0.42, 0.03, white); // mattress
+        box(w0, 0.9, 0.08, 0, 0.45, -d0 / 2 + 0.04, wood);
+        box(w0 * 0.38, 0.12, 0.35, -w0 * 0.22, 0.58, -d0 / 2 + 0.3, white); box(w0 * 0.38, 0.12, 0.35, w0 * 0.22, 0.58, -d0 / 2 + 0.3, white);
+        box(w0 - 0.04, 0.05, d0 * 0.55, 0, 0.545, d0 * 0.2, body); // duvet
+        break;
+      case "table":
+        box(w0, 0.04, d0, 0, 0.73, 0, wood); legs(w0 - 0.06, d0 - 0.06, 0.71, 0.05);
+        break;
+      case "chair":
+        box(w0, 0.05, d0, 0, 0.45, 0, wood); legs(w0, d0, 0.43, 0.035);
+        box(w0, 0.42, 0.04, 0, 0.66, -d0 / 2 + 0.02, wood);
+        break;
+      case "kitchen":
+        box(w0, 0.86, d0 - 0.02, 0, 0.43, 0.01, white);
+        box(w0, 0.04, d0, 0, 0.88, 0, std(0x2f3032, 0.3));
+        box(0.5, 0.02, 0.4, w0 * 0.2, 0.9, 0, std(0xbfc3c7, 0.2, 0.9)); // sink
+        for (let i = 0; i < 4; i++) cyl(0.09, 0.012, -w0 * 0.25 + (i % 2) * 0.25, 0.905, -0.1 + Math.floor(i / 2) * 0.22, accent);
+        break;
+      case "toilet":
+        box(0.4, 0.38, 0.18, 0, 0.6, -d0 / 2 + 0.09, white);
+        cyl(0.19, 0.4, 0, 0.2, 0.08, white, 0.15);
+        break;
+      case "bath":
+        box(w0, 0.55, d0, 0, 0.275, 0, white);
+        box(w0 - 0.12, 0.05, d0 - 0.12, 0, 0.53, 0, std(0xdbe6ea, 0.1));
+        break;
+      case "stairs": {
+        const steps = 15, rise = h0 / steps, run = d0 / steps;
+        for (let i = 0; i < steps; i++) box(w0, rise * (i + 1), run, 0, rise * (i + 1) / 2, -d0 / 2 + run * (i + 0.5), wood);
+        break;
+      }
+      case "plant":
+        cyl(0.16, 0.35, 0, 0.175, 0, std(0xb9775a, 0.8), 0.12);
+        for (const [x, y, z, r] of [[0, 0.7, 0, 0.26], [0.1, 0.9, 0.05, 0.18], [-0.08, 0.85, -0.06, 0.2]] as const) {
+          const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), flat ? body : std(0x4f7a46, 0.8));
+          leaf.position.set(x, y, z); leaf.castShadow = !isGhost; model.add(leaf);
+        }
+        break;
+      case "tv":
+        box(w0 * 0.6, 0.04, 0.25, 0, 0.02, 0, accent);
+        box(0.06, 0.2, 0.04, 0, 0.12, 0, accent);
+        box(w0, 0.68, 0.04, 0, 0.55, 0, std(0x111214, 0.2));
+        break;
+      case "rug":
+        box(w0, 0.015, d0, 0, 0.0075, 0, this.materials.get("cozy-carpet") && !flat ? this.materials.get("cozy-carpet")! : body);
+        break;
+      case "wardrobe":
+        box(w0, h0, d0, 0, h0 / 2, 0, wood);
+        box(0.01, h0 - 0.1, 0.01, 0, h0 / 2, d0 / 2, accent);
+        cyl(0.012, 0.25, -0.06, 1.05, d0 / 2 + 0.02, accent); cyl(0.012, 0.25, 0.06, 1.05, d0 / 2 + 0.02, accent);
+        break;
+      default:
+        box(w0, h0, d0, 0, h0 / 2, 0);
     }
 
     // Overlap warning — red wireframe bounding box
     if (hasOverlap) {
-      const overlapGeo = new THREE.BoxGeometry(w + 0.05, 0.8, d + 0.05);
-      const overlapMat = new THREE.MeshBasicMaterial({ color: COLORS.overlap, wireframe: true });
-      const overlapMesh = new THREE.Mesh(overlapGeo, overlapMat);
+      const overlapMesh = new THREE.Mesh(new THREE.BoxGeometry(w0 + 0.05, 0.8, d0 + 0.05), new THREE.MeshBasicMaterial({ color: COLORS.overlap, wireframe: true }));
       overlapMesh.position.y = 0.4;
-      group.add(overlapMesh);
+      model.add(overlapMesh);
     }
 
     this.itemGroup.add(group);
@@ -2685,6 +2629,83 @@ export class SketchEngine {
     this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
   }
 
+  // ─── Materials ───────────────────────────────────────────────────────────────
+
+  getMaterials(): CustomMaterial[] { return this.projectData.materials ?? []; }
+
+  /** Add or replace an imported material at project level (one undo step). */
+  upsertMaterial(material: CustomMaterial) {
+    const list = this.getMaterials().filter(m => m.id !== material.id);
+    this.projectData = { ...this.projectData, materials: [...list, material] };
+    this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
+  }
+
+  /** Remove an imported material and clear it from every surface that used it. */
+  removeMaterial(id: string) {
+    this.syncActiveFloorScene();
+    for (const floor of this.projectData.floors) {
+      const s = floor.scene;
+      floor.scene = { ...s, rooms: s.rooms.map(r => r.materialId === id ? { ...r, materialId: undefined } : r), walls: s.walls.map(w => w.materialId === id ? { ...w, materialId: undefined } : w) };
+    }
+    this.projectData = { ...this.projectData, materials: this.getMaterials().filter(m => m.id !== id) };
+    this.sceneData = activeFloor(this.projectData);
+    this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
+  }
+
+  /** Apply a finish to a surface group. `materialId` undefined resets it. */
+  applyMaterial(target: { kind: "room-floor" | "room-walls" | "wall"; id: string } | { kind: "all-floors" | "all-walls" }, materialId: string | undefined) {
+    const s = this.sceneData;
+    let rooms = s.rooms, walls = s.walls;
+    if (target.kind === "room-floor") rooms = rooms.map(r => r.id === target.id ? { ...r, materialId } : r);
+    if (target.kind === "all-floors") rooms = rooms.map(r => ({ ...r, materialId }));
+    if (target.kind === "wall") walls = walls.map(w => w.id === target.id ? { ...w, materialId } : w);
+    if (target.kind === "all-walls") walls = walls.map(w => ({ ...w, materialId }));
+    if (target.kind === "room-walls") {
+      const r = s.rooms.find(x => x.id === target.id);
+      if (!r) return;
+      const onEdge = (p: Vec2) => p[0] >= r.x - .01 && p[0] <= r.x + r.w + .01 && p[1] >= r.z - .01 && p[1] <= r.z + r.d + .01
+        && (Math.abs(p[0] - r.x) < .01 || Math.abs(p[0] - r.x - r.w) < .01 || Math.abs(p[1] - r.z) < .01 || Math.abs(p[1] - r.z - r.d) < .01);
+      const sameSide = (w: Wall) => (Math.abs(w.a[0] - w.b[0]) < .01 && (Math.abs(w.a[0] - r.x) < .01 || Math.abs(w.a[0] - r.x - r.w) < .01)) || (Math.abs(w.a[1] - w.b[1]) < .01 && (Math.abs(w.a[1] - r.z) < .01 || Math.abs(w.a[1] - r.z - r.d) < .01));
+      rooms = rooms.map(x => x.id === r.id ? { ...x, wallMaterialId: materialId } : x);
+      walls = walls.map(w => onEdge(w.a) && onEdge(w.b) && sameSide(w) ? { ...w, materialId } : w);
+    }
+    this.sceneData = { ...s, rooms, walls };
+    this.syncActiveFloorScene(); this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
+  }
+
+  /** Set a wall's exact length by moving its end point (joined walls follow). */
+  setWallLength(id: string, length: number) {
+    const wall = this.sceneData.walls.find(w => w.id === id);
+    if (!wall || !(length > 0.05)) return;
+    const len = wallLen(wall) || 1;
+    const ux = (wall.b[0] - wall.a[0]) / len, uz = (wall.b[1] - wall.a[1]) / len;
+    this.setWallEndpoint(id, "b", [wall.a[0] + ux * length, wall.a[1] + uz * length]);
+  }
+
+  /** Move one wall end point to exact coordinates (joined walls follow). */
+  setWallEndpoint(id: string, endpoint: "a" | "b", position: Vec2) {
+    if (!position.every(Number.isFinite)) return;
+    const clamped = this.clampToBounds(position);
+    this.sceneData = moveJunction(this.sceneData, id, endpoint, clamped);
+    this.syncActiveFloorScene(); this.pushHistory(); this.rebuildScene(); this.emit("scene-change", this.sceneData);
+  }
+
+  /** Replace the whole project (e.g. from AI JSON), keeping undo history. */
+  replaceProject(project: Project) {
+    const prepared = parseProject(project);
+    prepared.id = this.projectData.id ?? prepared.id ?? nanoid();
+    prepared.name = project.name ?? this.projectData.name;
+    this.projectData = prepared;
+    this.sceneData = activeFloor(prepared);
+    this.cancelTool(); this.selectedId = null; this.selectedType = null; this.selectedObjects = [];
+    this.pushHistory();
+    this.buildGrid(this.sceneData.canvas);
+    this.rebuildScene();
+    this.fitToPlan();
+    this.notifySelection();
+    this.emit("scene-change", this.sceneData);
+  }
+
   updateVirtualCamera(id: string, updates: Partial<VirtualCamera>) {
     this.sceneData = {
       ...this.sceneData,
@@ -2833,11 +2854,11 @@ export class SketchEngine {
       if (it.kind === "label") {
         svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" font-family="system-ui" font-size="10" fill="#333">${escape(it.label ?? "")}</text>`;
       } else {
-        const [baseW, baseD] = FURNITURE_SIZES[it.kind];
+        const [baseW, baseD] = itemSize(it);
         const w = baseW * (it.scale ?? 1), d = baseD * (it.scale ?? 1);
         svg += `<g transform="rotate(${it.rot * 180 / Math.PI} ${px(it.x)} ${pz(it.z)})">`;
         svg += `<rect x="${px(it.x - w / 2)}" y="${pz(it.z - d / 2)}" width="${w * SCALE}" height="${d * SCALE}" fill="#8a9a6a" opacity="0.6" stroke="#5a6a3a" stroke-width="0.8"/>`;
-        svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui" font-size="7" fill="#2e3128">${it.kind}</text></g>`;
+        svg += `<text x="${px(it.x)}" y="${pz(it.z)}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui" font-size="7" fill="#2e3128">${escape(it.name ?? it.kind)}</text></g>`;
       }
     }
 
@@ -2964,8 +2985,8 @@ export class SketchEngine {
       lines.push(`  Room "${r.name}": ${r.w.toFixed(1)}m × ${r.d.toFixed(1)}m`);
     }
     for (const it of s.items) {
-      const [w, d] = FURNITURE_SIZES[it.kind];
-      lines.push(`  ${it.kind}: ${w}×${d}m at (${it.x.toFixed(1)}, ${it.z.toFixed(1)})`);
+      const [w, d] = itemSize(it);
+      lines.push(`  ${it.name ?? it.kind}: ${w}×${d}m at (${it.x.toFixed(1)}, ${it.z.toFixed(1)})`);
     }
     return lines.join("\n");
   }

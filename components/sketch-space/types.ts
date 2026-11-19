@@ -15,6 +15,7 @@ export interface Wall {
   height?: number;     // overrides WALL_HEIGHT when set
   thickness?: number;  // overrides WALL_THICKNESS
   color?: number;      // hex, optional custom material
+  materialId?: string; // textured finish (builtin or project material id)
 }
 
 export interface Room {
@@ -62,7 +63,24 @@ export interface Item {
   scale?: number;             // uniform scale, default 1.0
   label?: string;             // for text labels
   connectsToFloorId?: string; // for stairs linking floors
+  w?: number;                 // custom footprint width (m), overrides FURNITURE_SIZES
+  d?: number;                 // custom footprint depth (m)
+  h?: number;                 // custom height (m)
+  color?: number;             // hex finish colour
+  name?: string;              // user-facing name
 }
+
+/** Real footprint [width, depth] of an item in metres, before `scale`. */
+export function itemSize(item: Pick<Item, "kind" | "w" | "d">): [number, number] {
+  const [w, d] = FURNITURE_SIZES[item.kind];
+  return [item.w ?? w, item.d ?? d];
+}
+
+/** Default heights (m) used by the 3D builder when `h` is not set. */
+export const FURNITURE_HEIGHTS: Record<FurnitureKind, number> = {
+  bed: 0.55, sofa: 0.85, table: 0.75, kitchen: 0.9, toilet: 0.8, bath: 0.6,
+  stairs: 2.7, plant: 1.1, tv: 0.55, rug: 0.015, chair: 0.85, wardrobe: 2.1, label: 0,
+};
 
 // ── Virtual cameras ───────────────────────────────────────────────────────────
 export interface VirtualCamera {
@@ -78,89 +96,53 @@ export interface VirtualCamera {
 export interface MaterialPreset {
   id: string;
   name: string;
-  category?: "floor" | "wall";
+  category?: "floor" | "wall" | "any";
   textureUrl?: string;
   color?: string;
   previewColor?: string;
   roughness: number;
   metalness: number;
-  repeatPerMetre: number;
+  /** Real-world width/height (m) covered by one repeat of the texture. */
+  tileM: number;
+  /** @deprecated kept for older saved data; use tileM. */
+  repeatPerMetre?: number;
+}
+
+/** A user-imported (or AI-declared) PBR material stored once in the project. */
+export interface CustomMaterial {
+  id: string;
+  name: string;
+  category: "floor" | "wall" | "any";
+  albedo?: string;        // data:image/... or https:// colour map
+  normal?: string;        // optional normal map (OpenGL / +Y)
+  roughnessMap?: string;  // optional roughness map (greyscale)
+  color?: string;         // "#rrggbb" tint, or flat colour when no albedo
+  tileM: number;          // real-world size of one texture repeat (m)
+  roughness: number;      // 0–1
+  metalness: number;      // 0–1
 }
 
 export const BUILTIN_MATERIALS: MaterialPreset[] = [
-  {
-    id: "oak-wood",
-    name: "Oak Hardwood",
-    category: "floor",
-    previewColor: "#c89d66",
-    roughness: 0.4,
-    metalness: 0.05,
-    repeatPerMetre: 1.5,
-  },
-  {
-    id: "polished-concrete",
-    name: "Polished Concrete",
-    category: "floor",
-    previewColor: "#9ca3af",
-    roughness: 0.25,
-    metalness: 0.1,
-    repeatPerMetre: 1.0,
-  },
-  {
-    id: "marble-tile",
-    name: "White Carrara Marble",
-    category: "floor",
-    previewColor: "#e5e7eb",
-    roughness: 0.15,
-    metalness: 0.05,
-    repeatPerMetre: 1.2,
-  },
-  {
-    id: "slate-tile",
-    name: "Dark Slate Tile",
-    category: "floor",
-    previewColor: "#374151",
-    roughness: 0.6,
-    metalness: 0.05,
-    repeatPerMetre: 1.0,
-  },
-  {
-    id: "cozy-carpet",
-    name: "Cozy Wool Carpet",
-    category: "floor",
-    previewColor: "#d1c7bd",
-    roughness: 0.85,
-    metalness: 0.0,
-    repeatPerMetre: 2.0,
-  },
-  {
-    id: "white-plaster",
-    name: "Clean White Plaster",
-    category: "wall",
-    previewColor: "#f3f4f6",
-    roughness: 0.7,
-    metalness: 0.0,
-    repeatPerMetre: 1.0,
-  },
-  {
-    id: "exposed-brick",
-    name: "Red Brickwork",
-    category: "wall",
-    previewColor: "#994d38",
-    roughness: 0.8,
-    metalness: 0.0,
-    repeatPerMetre: 1.5,
-  },
-  {
-    id: "warm-wood-panel",
-    name: "Vertical Timber Slats",
-    category: "wall",
-    previewColor: "#8d6446",
-    roughness: 0.45,
-    metalness: 0.05,
-    repeatPerMetre: 2.0,
-  },
+  { id: "oak-wood", name: "Oak Planks", category: "floor", previewColor: "#c49a64", roughness: 0.55, metalness: 0, tileM: 1.2 },
+  { id: "walnut-wood", name: "Walnut Planks", category: "floor", previewColor: "#6b4a33", roughness: 0.5, metalness: 0, tileM: 1.2 },
+  { id: "herringbone-oak", name: "Herringbone Oak", category: "floor", previewColor: "#b98c58", roughness: 0.5, metalness: 0, tileM: 1.2 },
+  { id: "polished-concrete", name: "Polished Concrete", category: "any", previewColor: "#9a9d9f", roughness: 0.4, metalness: 0, tileM: 3 },
+  { id: "marble-tile", name: "Carrara Marble Tile", category: "floor", previewColor: "#e7e7e4", roughness: 0.2, metalness: 0, tileM: 1.2 },
+  { id: "slate-tile", name: "Slate Tile", category: "floor", previewColor: "#3d4246", roughness: 0.75, metalness: 0, tileM: 1.2 },
+  { id: "ceramic-tile", name: "White Ceramic Tile", category: "any", previewColor: "#eeeeea", roughness: 0.18, metalness: 0, tileM: 0.6 },
+  { id: "terrazzo", name: "Terrazzo", category: "floor", previewColor: "#ddd6cb", roughness: 0.3, metalness: 0, tileM: 1 },
+  { id: "cozy-carpet", name: "Wool Carpet", category: "floor", previewColor: "#cfc4b8", roughness: 0.95, metalness: 0, tileM: 0.5 },
+  { id: "white-plaster", name: "White Plaster", category: "wall", previewColor: "#efeeea", roughness: 0.9, metalness: 0, tileM: 2 },
+  { id: "limewash", name: "Warm Limewash", category: "wall", previewColor: "#e2d6c3", roughness: 0.92, metalness: 0, tileM: 2.5 },
+  { id: "sage-paint", name: "Sage Paint", category: "wall", previewColor: "#8d9e88", roughness: 0.85, metalness: 0, tileM: 2 },
+  { id: "exposed-brick", name: "Red Brick", category: "wall", previewColor: "#9a4f3a", roughness: 0.85, metalness: 0, tileM: 0.9 },
+  { id: "subway-tile", name: "Subway Tile", category: "wall", previewColor: "#f1f0ec", roughness: 0.15, metalness: 0, tileM: 0.6 },
+  { id: "warm-wood-panel", name: "Timber Slats", category: "wall", previewColor: "#8a6345", roughness: 0.6, metalness: 0, tileM: 0.6 },
 ];
+
+export function builtinMaterial(id: string): MaterialPreset | undefined {
+  return BUILTIN_MATERIALS.find((m) => m.id === id);
+}
 
 export interface TraceReference {
   name: string;
@@ -209,6 +191,7 @@ export interface Project {
   name?: string;
   activeFloorId: string;
   floors: FloorLevel[];
+  materials?: CustomMaterial[]; // imported / AI-declared PBR materials
 }
 
 export function activeFloor(project: Project): Scene {

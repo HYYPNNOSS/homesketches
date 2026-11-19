@@ -1,4 +1,4 @@
-import { FURNITURE_SIZES, emptyScene, type Scene, type Vec2 } from "./types";
+import { itemSize, emptyScene, type Scene, type Vec2 } from "./types";
 export type SelectionKind = "wall" | "room" | "opening" | "item" | "camera";
 export type SelectedObject = { id: string; type: SelectionKind };
 export type PlanBounds = { minX: number; maxX: number; minZ: number; maxZ: number };
@@ -15,7 +15,7 @@ export function objectBounds(scene: Scene, object: SelectedObject): PlanBounds |
   if(object.type==='camera'){const c=scene.virtualCameras?.find(c=>c.id===object.id);if(c)points=[c.position,c.targetPosition];}
   if(object.type==='item'){
     const i=scene.items.find(i=>i.id===object.id);
-    if(i){const [w,d]=FURNITURE_SIZES[i.kind], sc=i.scale??1, c=Math.cos(i.rot), s=Math.sin(i.rot);points=[[-w/2,-d/2],[w/2,-d/2],[w/2,d/2],[-w/2,d/2]].map(([x,z])=>[i.x+sc*(x*c+z*s),i.z+sc*(-x*s+z*c)] as Vec2);}
+    if(i){const [w,d]=itemSize(i), sc=i.scale??1, c=Math.cos(i.rot), s=Math.sin(i.rot);points=[[-w/2,-d/2],[w/2,-d/2],[w/2,d/2],[-w/2,d/2]].map(([x,z])=>[i.x+sc*(x*c+z*s),i.z+sc*(-x*s+z*c)] as Vec2);}
   }
   if(!points.length)return null;
   return {minX:Math.min(...points.map(p=>p[0])),maxX:Math.max(...points.map(p=>p[0])),minZ:Math.min(...points.map(p=>p[1])),maxZ:Math.max(...points.map(p=>p[1]))};
@@ -25,7 +25,7 @@ export function allObjects(scene: Scene): SelectedObject[]{
 }
 export function hitObject(scene: Scene, point: Vec2): SelectedObject | null {
   for(const item of [...scene.items].reverse()){
-    const dx=point[0]-item.x,dz=point[1]-item.z,c=Math.cos(item.rot),s=Math.sin(item.rot),[w,d]=FURNITURE_SIZES[item.kind],sc=item.scale??1;
+    const dx=point[0]-item.x,dz=point[1]-item.z,c=Math.cos(item.rot),s=Math.sin(item.rot),[w,d]=itemSize(item),sc=item.scale??1;
     if(Math.abs(dx*c-dz*s)<=Math.max(.25,w*sc/2)&&Math.abs(dx*s+dz*c)<=Math.max(.25,d*sc/2))return {id:item.id,type:'item'};
   }
   const opening=scene.openings.find(o=>Math.hypot(point[0]-o.at[0],point[1]-o.at[1])<Math.max(.3,o.w/2));
