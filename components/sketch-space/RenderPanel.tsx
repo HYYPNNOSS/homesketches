@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { apiRequest } from "../../lib/api";
 import { saveProject } from "../../lib/workspace-store";
 import {
   render as apiRender,
@@ -17,7 +16,6 @@ import {
   Scene,
   Project,
   VirtualCamera,
-  isValidScene,
 } from "./types";
 import type { SketchEngine } from "./engine";
 import { AiJsonPanel } from "./AiJsonPanel";
@@ -273,14 +271,9 @@ export function RenderPanel({
     setStatus("idle");
   }
 
-  // ── Built-in starter layout (fallback when no external AI is used) ────────
+  // ── Built-in starter layout (offline fallback when no AI is used) ────────
   async function handleGeneratePlan(brief: string): Promise<string> {
-    let plan: Scene | null = null;
-    try {
-      const data = await apiRequest<Scene>("/text-to-sketch/plan", { method: "POST", body: JSON.stringify({ prompt: brief }) });
-      if (isValidScene(data)) plan = data;
-    } catch { /* backend not running: use the built-in generator */ }
-    plan ??= generateAlgorithmicPlan(brief);
+    const plan = generateAlgorithmicPlan(brief);
     onLoadGeneratedPlan?.(plan);
     return `Loaded a starter with ${plan.rooms.length} rooms and ${plan.walls.length} walls.`;
   }

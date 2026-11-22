@@ -81,7 +81,7 @@ try {
  await page.locator('.studio-nav a[href="/dashboard/settings"]').click(); await page.getByText('Sign in to load and update your profile.',{exact:true}).waitFor();
  await page.evaluate(()=>localStorage.setItem('homesketches_access_token','test.'+btoa(JSON.stringify({sub:'test-user'}))+'.test'));
  let profile={id:'test-user',name:'Original name',email:'test@example.com'};
- await page.route('**/api/backend/auth/me',route=>{
+ await page.route('**/api/auth/me',route=>{
   if(route.request().method()==='PATCH') { assert.equal(route.request().headers().authorization,'Bearer test.'+Buffer.from(JSON.stringify({sub:'test-user'})).toString('base64')+'.test'); profile.name=route.request().postDataJSON().name; }
   return route.fulfill({json:profile});
  });

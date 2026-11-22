@@ -1244,6 +1244,10 @@
 .sk-ai-note { margin: 10px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--sk-paper-2); color: var(--sk-ink-2); font-size: 12px; line-height: 1.45; }
 .sk-ai-starter { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--sk-line); font-size: 12px; color: var(--sk-muted); }
 .sk-ai-starter summary, .sk-mat-more summary, .sk-mat-import summary { cursor: pointer; font-weight: 600; color: var(--sk-ink-2); font-size: 12px; margin-bottom: 8px; }
+.sk-ai-free { display: grid; gap: 8px; margin: 4px 0 14px; }
+.sk-ai-free > strong { color: var(--sk-ink); font-size: 12px; }
+.sk-ai-manual { margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--sk-line); font-size: 12px; }
+.sk-ai-manual > summary { cursor: pointer; font-weight: 600; color: var(--sk-ink-2); font-size: 12px; margin-bottom: 10px; }
 
 /* ── Materials panel ────────────────────────────────────────────────────── */
 .sk-mat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin: 10px 0; }

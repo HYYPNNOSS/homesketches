@@ -1,4 +1,5 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api/backend";
+// Same-origin Next.js API routes (app/api/*). NEXT_PUBLIC_API_URL overrides it.
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("homesketches_access_token") : null;
@@ -9,7 +10,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   try {
     response = await fetch(`${API_URL}${path}`, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(20000) });
   } catch {
-    throw new Error("Cannot reach the studio API. Start the app with npm run dev and try again.");
+    throw new Error("Cannot reach the studio API. Check your connection and try again.");
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(Array.isArray(data.message) ? data.message.join(". ") : data.message ?? data.error ?? "The request failed. Please try again.");

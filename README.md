@@ -1,21 +1,18 @@
 # HomeSketches
 
-Next.js architectural studio with a NestJS API in `../sketchback`.
+Next.js architectural studio. Accounts, AI plan generation and render proxying run as Next.js API routes (`app/api/*`), so only this app needs hosting. Renders come from the Roomwright Cloudflare worker in `../roomwright`. The old NestJS API in `../sketchback` is no longer required.
 
 ## Run locally
 
-Install dependencies in both folders:
-
 ```sh
 npm install
-npm --prefix ../sketchback install
-cp .env.example .env.local
+cp .env.example .env.local   # then fill in the values
 npm run dev
 ```
 
-`npm run dev` starts Next.js on port 3000 and NestJS on port 4000. It reuses an already-running backend. Pass `-- --port 3100` to change the frontend port. Use `npm run frontend:dev` or `npm run backend:dev` to run them separately.
+`npm run dev` starts Next.js on port 3000 (pass `-- --port 3100` to change it). Required server-side variables: `DATABASE_URL`, `JWT_SECRET` (accounts), `ROOMWRIGHT_API_URL`, `ROOMWRIGHT_API_KEY` (renders), `GROQ_API_KEY` and/or `GEMINI_API_KEY` (AI floor plans). `FAL_KEY` is optional and paid.
 
-Browser API calls use the same-origin `/api/backend` proxy by default. Configure `BACKEND_API_URL` to point the Next.js server at another NestJS API. An explicit `NEXT_PUBLIC_API_URL` remains supported for deployments that call the API directly.
+Browser API calls go to same-origin routes under `/api`; `NEXT_PUBLIC_API_URL` overrides the base. No secret is exposed to the browser.
 
 ## Dashboard
 
@@ -29,15 +26,14 @@ Projects and assets are local to this browser and origin, separated by signed-in
 
 ## Authentication
 
-Configure `sketchback/.env` with reachable PostgreSQL `DATABASE_URL`, `DATABASE_URL_UNPOOLED`, and `JWT_SECRET`. Run Prisma generation and initialize the schema as described in the backend README. An unreachable database prevents account operations; the interface reports failures instead of treating them as saved changes.
+`app/api/auth/{register,login,me}` store accounts in the Neon Postgres `users` table (`lib/auth-server.ts`). Set `DATABASE_URL` and `JWT_SECRET` (and optionally `JWT_EXPIRES_IN`, default `7d`). Passwords use bcrypt and tokens are HS256 JWTs, compatible with accounts and sessions created by the former NestJS API. Login/register attempts are limited to 10 per minute per IP. An unreachable database prevents account operations; the interface reports failures instead of treating them as saved changes.
 
-API documentation: `http://localhost:4000/docs`. Health: `http://localhost:4000/health`.
 
 ## Verify dashboard behavior
 
 With the app running, run `npm run test:dashboard`. The checks use a fresh browser session and mock AI and profile responses; they do not make paid generation requests or change database users. They cover sidebar navigation away from Sketch Space, asset persistence and attachment, text-render fallback, result archiving, generation failures and retries, 3D preview loading, profile requests, and mobile navigation.
 
-Set `TEST_BASE_URL` for a different local port, and `CHROME_PATH` to your installed Chromium/Chrome executable (default `/opt/google/chrome/chrome`). Run `npm run build` and `npm run backend:build` for production compilation.
+Set `TEST_BASE_URL` for a different local port, and `CHROME_PATH` to your installed Chromium/Chrome executable (default `/opt/google/chrome/chrome`). Run `npm run build` for production compilation.
 
 ## Sketch Space workflow
 

@@ -1,7 +1,10 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildAiPrompt, buildProjectFromAiJson, type AiBuildResult } from "./ai-json";
 import type { Project } from "./types";
+import { fileToImageInput, type PickedImage } from "../../lib/media";
+
+type PlanResponse = AiBuildResult & { provider?: string; message?: string };
 
 const EXAMPLE = `{
   "name": "Garden flat",
@@ -49,6 +52,40 @@ export function AiJsonPanel({ onBuild, onGetProject, onStarter }: {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [debounced, setDebounced] = useState("");
+  const [sketch, setSketch] = useState<PickedImage | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function pickSketch(file?: File) {
+    if (!file) return;
+    try { setSketch(await fileToImageInput(file)); setNote(""); }
+    catch (e) { setNote(e instanceof Error ? e.message : "Couldn't read that image."); }
+  }
+
+  async function generate(modify: boolean) {
+    if (aiBusy || (!brief.trim() && !sketch)) return;
+    setAiBusy(true); setNote(sketch ? "Reading your sketch…" : "Designing your plan…");
+    try {
+      const res = await fetch("/api/ai/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          brief,
+          image: sketch ? { data: sketch.data, mime: sketch.mime } : undefined,
+          current: modify ? JSON.stringify(onGetProject()) : undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({})) as PlanResponse;
+      if (!res.ok || !data.project) throw new Error(data.message ?? `The AI service failed (${res.status}).`);
+      setJson(JSON.stringify(data.project, null, 2));
+      if (onBuild(data.project)) {
+        const st = data.stats;
+        setNote(`Built ${st.rooms} rooms, ${st.walls} walls, ${st.openings} doors/windows and ${st.items} items${data.provider ? ` (${data.provider})` : ""}. Undo (Ctrl+Z) restores the previous design.`);
+      }
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "The AI service failed.");
+    } finally { setAiBusy(false); }
+  }
   useEffect(() => { const t = setTimeout(() => setDebounced(json), 250); return () => clearTimeout(t); }, [json]);
   const parsed = useMemo<{ result?: AiBuildResult; error?: string }>(() => {
     if (!debounced.trim()) return {};
@@ -71,14 +108,35 @@ export function AiJsonPanel({ onBuild, onGetProject, onStarter }: {
     <div className="sk-panel-section sk-ai">
       <div className="sk-panel-heading">
         <span className="sk-panel-eyebrow">AI → Sketch</span>
-        <h2 className="sk-panel-title">Build from JSON</h2>
+        <h2 className="sk-panel-title">Build with AI</h2>
       </div>
 
+      <div className="sk-ai-free">
+        <strong>Generate with free AI</strong>
+        <textarea className="sk-textarea" rows={3} value={brief} onChange={e => setBrief(e.target.value)} aria-label="Describe the space"
+          placeholder="e.g. 85 m² two-bedroom flat, open kitchen-living facing south, ensuite" />
+        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={e => { void pickSketch(e.target.files?.[0]); e.target.value = ""; }} />
+        {sketch && (
+          <div className="sk-ai-row">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={sketch.preview} alt="Attached sketch" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 6 }} />
+            <button type="button" className="sk-ai-btn" onClick={() => setSketch(null)}>Remove sketch</button>
+          </div>
+        )}
+        <div className="sk-ai-row">
+          <button type="button" className="sk-ai-btn sk-ai-primary" disabled={aiBusy || (!brief.trim() && !sketch)} onClick={() => generate(false)}>
+            {aiBusy ? "Working…" : sketch ? "Build from sketch" : "Generate plan"}
+          </button>
+          <button type="button" className="sk-ai-btn" disabled={aiBusy} onClick={() => fileRef.current?.click()}>{sketch ? "Change sketch" : "Upload sketch"}</button>
+          <button type="button" className="sk-ai-btn" disabled={aiBusy || !brief.trim() || !!sketch} onClick={() => generate(true)} title="Apply the description as a change to the current design">Edit current</button>
+        </div>
+      </div>
+
+      <details className="sk-ai-manual">
+      <summary>Or use your own AI (copy/paste JSON)</summary>
       <ol className="sk-ai-steps">
         <li>
-          <strong>Describe the space</strong>
-          <textarea className="sk-textarea" rows={3} value={brief} onChange={e => setBrief(e.target.value)} aria-label="Describe the space for the AI"
-            placeholder="e.g. 85 m² two-bedroom flat, open kitchen-living facing south, ensuite, Scandinavian finishes" />
+          <strong>Copy the prompt (uses the description above)</strong>
           <div className="sk-ai-row">
             <button type="button" className="sk-ai-btn sk-ai-primary" onClick={() => copy(buildAiPrompt(brief), "Prompt copied. Paste it into ChatGPT, Claude or Gemini, then paste the JSON it returns below.")}>Copy AI prompt</button>
             <button type="button" className="sk-ai-btn" onClick={() => copy(JSON.stringify(onGetProject(), null, 2), "Current design copied as JSON. Paste it to an AI with your changes, e.g. “add a study next to the bedroom”.")}>Copy current design</button>
@@ -103,6 +161,7 @@ export function AiJsonPanel({ onBuild, onGetProject, onStarter }: {
           <button type="button" className="sk-render-btn" style={{ width: "100%" }} disabled={!parsed.result} onClick={build}>Build in Sketch <span>→</span></button>
         </li>
       </ol>
+      </details>
       {note && <p className="sk-ai-note" role="alert">{note}</p>}
 
       {onStarter && (

@@ -1,17 +1,14 @@
 /**
  * Roomwright API client (lib/roomwright.ts)
- * Wraps the Cloudflare Workers AI endpoint.
+ * Wraps the Cloudflare Workers AI endpoint via the /api/roomwright proxy.
  */
 
-const API_URL =
-  process.env.NEXT_PUBLIC_ROOMWRIGHT_API_URL ??
-  "https://cool-pond-e385.anyahadri17.workers.dev";
+// Same-origin proxy (app/api/roomwright) adds the API key on the server.
+const API_URL = "/api/roomwright";
 
-const API_KEY = process.env.NEXT_PUBLIC_ROOMWRIGHT_API_KEY ?? "";
 
 function headers(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (API_KEY) h["Authorization"] = `Bearer ${API_KEY}`;
   return h;
 }
 

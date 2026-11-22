@@ -62,7 +62,7 @@ try{
  await page.getByRole('button',{name:'Import and apply',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.sk-mat.active [data-material^="custom-"]'));
  let textured=await exported();assert.equal(textured.materials.length,1);assert.ok(/^data:image\/(webp|jpeg)/.test(textured.materials[0].albedo));assert.equal(textured.floors.find(f=>f.id==='ground').scene.rooms[0].materialId,textured.materials[0].id);
  console.log('PASS procedural and imported PBR textures');
- await page.getByRole('button',{name:'AI JSON',exact:true}).click();await page.getByRole('button',{name:'Load example',exact:true}).click();await page.getByText(/^Ready: 5 rooms/).waitFor();
+ await page.getByRole('button',{name:'AI JSON',exact:true}).click();await page.getByText('Or use your own AI (copy/paste JSON)').click();await page.getByRole('button',{name:'Load example',exact:true}).click();await page.getByText(/^Ready: 5 rooms/).waitFor();
  await page.getByRole('button',{name:'Build in Sketch',exact:false}).click();await page.getByText(/^Built 5 rooms/).waitFor();
  const built=await exported();const bs=built.floors[0].scene;assert.equal(built.floors.length,1);assert.equal(bs.rooms.length,5);assert.equal(bs.openings.length,8);assert.ok(bs.walls.length>=12);assert.ok(bs.walls.some(w=>w.materialId==='subway-tile'));assert.ok(bs.openings.every(o=>bs.walls.some(w=>w.id===o.wallId)));
  await page.getByRole('button',{name:'Undo (Ctrl+Z)',exact:true}).click();assert.equal((await exported()).floors.length,2);
